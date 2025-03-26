@@ -4,7 +4,7 @@
 #include <U8g2lib.h>
 #include <Preferences.h>
 #include <QRCodeGenerator.h>
-#include "bip39_wordlist.h" // Ensure this file exists and contains the wordlist array
+#include "bip39_wordlist.h" 
 
 #include <mbedtls/md.h>      // For HMAC-SHA512
 #include <mbedtls/sha256.h>  // For SHA-256

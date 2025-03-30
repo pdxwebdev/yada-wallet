@@ -1,95 +1,48 @@
-# Yada Wallet (ESP32 Hardware Wallet)
+# ESP32 Yada Hardware Wallet (3-QR Display)
 
-This project implements a **secure, air-gapped hardware wallet** using an ESP32 and an OLED screen. It is designed for **YadaCoin** key generation and **secure key rotation** using a password-protected derivation system inspired by BIP85 and the YadaCoin whitepaper.
+A hardware wallet proof-of-concept for ESP32 + OLED display implementing the YadaCoin key rotation security model. Displays 3 separate QR codes for Address, Next Hash (H+1), and Next+1 Hash (H+2).
 
----
+**Purpose:** Securely generate keys and the specific hash data required by the Yada protocol, making them easily scannable.
 
-## 🔐 Features
+## Core Features
 
-- Enter a 6-digit password (KDP) using **two buttons** (Ledger-style navigation)
-- Derives a **root HD wallet** + 3 **child wallets**
-- Each child uses a multi-rotation derivation for brute-force resistance
-- Displays:
-  - Public Address
-  - 12-word mnemonic
-  - WIF QR code
-- Child wallets include a **pre-rotated key hash** for on-chain validation (key log security)
+*   **Generates/Loads:** Standard 12-word BIP39 mnemonic.
+*   **PIN Protected:** Uses a 6-digit PIN as part of the key derivation (KDP).
+*   **Yada Key Rotation:** Calculates keys based on `m/83696968'/39'/PIN'/Index'`.
+*   **3 QR Codes Displayed:**
+    1.  **Current Address**
+    2.  **Next Public Key Hash (H+1)**
+    3.  **Next+1 Public Key Hash (H+2)**
+*   **Navigation:** Left/Right buttons change the rotation index.
+*   **View Mnemonic:** Hold both buttons to see the root phrase.
+*   **Storage:** Saves mnemonic securely on the ESP32 (NVS).
 
----
+## What it DOES NOT Do
 
-## 🎮 Controls
+*   Connect to the internet or any blockchain.
+*   Create or sign transactions.
+*   Store the on-chain key log.
+    *(It's a secure key and data generator for the Yada protocol)*
 
-| Action                    | Button(s)           |
-|---------------------------|---------------------|
-| Cycle PIN digit           | Right button (D25)  |
-| Confirm PIN digit         | Left button (D26)   |
-| Cycle wallets (after PIN) | Left button         |
+## Hardware Needed
 
----
+*   ESP32 Board
+*   SSD1306 OLED Display (128x64 I2C)
+*   2 Push Buttons
 
-## 🧠 How It Works
+## Software Needed
 
-1. **Password Input**
-   - 6-digit PIN entered via buttons
-   - Used as the passphrase in BIP32 HD wallet derivation
+*   Arduino IDE + ESP32 Core
+*   Libraries: `U8g2`, `Arduino Bitcoin Library`, `QRCodeGenerator`
+*   `bip39_wordlist.h` file (included in repo)
 
-2. **Root Wallet**
-   - Derived directly from the master seed + PIN
-   - Displays full mnemonic and address
+## Basic Usage
 
-3. **Child Wallets**
-   - Derived from custom path: `m/83696968'/39'/0'/12'/n'`
-   - HMAC-SHA512 of child private key → 128 bits entropy → child mnemonic
-
-4. **Key Log Hashing**
-   - Public key from each child → SHA256 hash
-   - Printed to Serial Monitor as `Pre-rotated Key Hash`
-   - Enables future blockchain-side validation
-
----
-
-## 🔧 Requirements
-
-- ESP32 Dev Board
-- SSD1306 128x64 OLED Display (I2C)
-- 2 push buttons (D25 and D26)
-- Libraries:
-  - `U8g2`
-  - `Preferences`
-  - `QRCodeGenerator`
-  - `Bitcoin.h` (from uBitcoin)
-  - `mbedtls`
-
----
-
-## 📦 Installation
-
-1. Clone this repo to your Arduino sketch folder
-2. Install dependencies via Library Manager
-3. Connect:
-   - OLED to I2C (usually GPIO21 SDA, GPIO22 SCL)
-   - Buttons to GPIO25 and GPIO26 (with pull-down resistors)
-4. Upload to your ESP32
-
----
-
-## 🔒 License
-
-This project is based on the YadaCoin protocol and uses the YadaCoin Open Source License v1.1.
-
-This code is shared for educational and research purposes only.
-
-Commercial use, blockchain forks, or branding use without permission from the original authors is not allowed.
-
-Original License: [YadaCoin Open Source License v1.1](https://github.com/yadacoin/yadacoin/blob/master/LICENSE.txt)
-
-For commercial inquiries, contact: info@yadacoin.io
-
----
-
-## 🧪 Status
-
-✅ PIN entry and wallet cycling working
-✅ QR code displayed for each wallet
-✅ Public address and mnemonic shown
-✅ Key log hash printed via Serial
+1.  **Setup:** Install libraries, connect hardware, upload code.
+2.  **Power On:** Device initializes.
+3.  **Enter PIN:** Use Left to cycle digit, Right to confirm.
+4.  **(First Time Only):** Backup the 12-word mnemonic shown. Confirm with Right button.
+5.  **Wallet View:** See rotation index and 3 QR codes.
+    *   **Scan:** Use a QR app (cover adjacent codes).
+    *   **Navigate:** Use Left/Right buttons for previous/next rotation.
+    *   **View Secret:** Hold BOTH buttons. Press any single button to return.

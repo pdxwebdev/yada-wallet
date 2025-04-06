@@ -1,14 +1,18 @@
 #include <Arduino.h>
-#include <Bitcoin.h>          
+#include <Bitcoin.h>          // https://github.com/micro-bitcoin/uBitcoin
 #include <Networks.h>         // Part of the Bitcoin library
 #include <U8g2lib.h>          // https://github.com/olikraus/u8g2
 #include <Preferences.h>      // Built-in ESP32 library
-#include <QRCodeGenerator.h>  
-#include "bip39_wordlist.h"   // Needs to be included 
+#include <QRCodeGenerator.h>  // https://github.com/Tomstark/QRCodeGenerator
+#include "bip39_wordlist.h"   // Needs to be included (Make sure this file exists in your project)
 
 #include <mbedtls/sha256.h>
 #include <esp_system.h>
 #include "esp_heap_caps.h"
+#include <stdint.h>        // For uint32_t
+#include <arpa/inet.h>     // For ntohl (Network to Host Long for endianness handling)
+#include <string.h>        // For memcpy
+
 
 // --- Hardware Pins ---
 const int buttonLeft = 26;  // GPIO 26
@@ -54,7 +58,7 @@ char password[PIN_LENGTH + 1]; // +1 for null terminator
 int currentDigitIndex = 0;
 int currentDigitValue = 0;
 bool passwordConfirmed = false;
-uint32_t kdp_as_int = 0; // KDP (Key Derivation Path) component from PIN
+// Removed kdp_as_int as it's no longer directly used in the path
 
 // --- Wallet View State ---
 int currentRotationIndex = 0;
@@ -96,6 +100,14 @@ String hashPublicKey(const PublicKey& pubKey) {
         Serial.println("E: Public Key string empty");
         return "Hashing Error";
     }
+    // Public keys are typically 33 bytes (compressed) or 65 bytes (uncompressed)
+    // The library usually returns compressed (0x02 or 0x03 prefix)
+    // 33 bytes = 66 hex chars
+    if (pubKeyHex.length() != 66 && pubKeyHex.length() != 130) {
+        Serial.print("W: Unexpected public key hex length: "); Serial.println(pubKeyHex.length());
+        // Proceed cautiously, but log a warning.
+    }
+
     size_t len = pubKeyHex.length() / 2;
      if (len == 0) {
          Serial.println("E: Calculated key byte length is zero.");
@@ -107,10 +119,12 @@ String hashPublicKey(const PublicKey& pubKey) {
         return "Hashing Error";
     }
 
+    // Hex string to byte array conversion
     for (size_t i = 0; i < len; i++) {
         unsigned int byteValue;
-        if (i * 2 + 2 > pubKeyHex.length()) {
-             Serial.println("E: Hex string too short during conversion.");
+         // Check bounds to prevent reading past the end of the hex string
+        if ((i * 2 + 1) >= pubKeyHex.length()) { // Check if accessing substring(i*2, i*2+2) is safe
+             Serial.println("E: Hex string index out of bounds during conversion.");
              free(pubKeyBytes);
              return "Hashing Error";
         }
@@ -126,6 +140,7 @@ String hashPublicKey(const PublicKey& pubKey) {
     free(pubKeyBytes);
     return result;
 }
+
 
 // --- sha256Raw (Calculate SHA256 and output raw bytes) ---
 bool sha256Raw(const uint8_t* data, size_t len, uint8_t outputHashBuffer[32]) {
@@ -161,7 +176,9 @@ String bytesToHex(const uint8_t* bytes, size_t len) {
     return hex;
 }
 
-// --- pinToInt ---
+// --- pinToInt (Removed, no longer needed for direct path component) ---
+// Kept the function here in case it's needed elsewhere, but commented out.
+/*
 bool pinToInt(const char* pinStr, uint32_t& result) {
     char* endptr;
     long val = strtol(pinStr, &endptr, 10);
@@ -171,10 +188,48 @@ bool pinToInt(const char* pinStr, uint32_t& result) {
     result = (uint32_t)val;
     return true;
 }
+*/
+
+// --- deriveIndexCpp (Calculates derivation index based on PIN and level) ---
+// Matches the logic: sha256(PIN + level) -> first 4 bytes -> uint32 -> mask 0x7FFFFFFF
+// Returns index < 0x80000000 (non-hardened range limit)
+uint32_t deriveIndexCpp(const char* pinStr, int level) {
+    String inputString = String(pinStr) + String(level);
+    uint8_t hashOutput[32]; // SHA-256 produces 32 bytes
+
+    mbedtls_sha256_context ctx;
+    mbedtls_sha256_init(&ctx);
+    mbedtls_sha256_starts(&ctx, 0); // 0 for SHA-256
+    mbedtls_sha256_update(&ctx, (const unsigned char*)inputString.c_str(), inputString.length());
+    mbedtls_sha256_finish(&ctx, hashOutput);
+    mbedtls_sha256_free(&ctx);
+
+    // Extract the first 4 bytes (32 bits) of the hash
+    // Use ntohl to ensure consistent byte order interpretation (network order -> host order)
+    uint32_t indexRaw;
+    memcpy(&indexRaw, hashOutput, sizeof(uint32_t)); // Copy first 4 bytes from hash
+    indexRaw = ntohl(indexRaw); // Convert from network byte order (big-endian assumed from hash)
+
+    // Ensure the index is within the non-hardened range (0 to 2^31 - 1)
+    // Mask with 0x7FFFFFFF to clear the most significant bit (hardening bit).
+    uint32_t index = indexRaw & 0x7FFFFFFF;
+
+    // --- Optional Debugging ---
+    // Serial.print("deriveIndexCpp Input: '"); Serial.print(inputString); Serial.println("'");
+    // Serial.print("  Hash[0..3]: ");
+    // for(int i=0; i<4; i++){ if(hashOutput[i]<0x10) Serial.print("0"); Serial.print(hashOutput[i], HEX); }
+    // Serial.println();
+    // Serial.print("  Index Raw (BE -> Host): "); Serial.println(indexRaw);
+    // Serial.print("  Final Index (masked): "); Serial.println(index);
+    // --- End Debugging ---
+
+    return index;
+}
+
 
 // --- generateMnemonicFromEntropy ---
 String generateMnemonicFromEntropy(const uint8_t* entropy, size_t length) {
-  if (length != 16) { Serial.println("E: Mnemonic gen supports only 16B."); return ""; }
+  if (length != 16) { Serial.println("E: Mnemonic gen supports only 16B (12 words)."); return ""; }
   uint8_t cs_len = (length * 8) / 32; // Checksum length in bits (4 bits for 128-bit entropy)
   uint8_t hash[32];
   // Use mbedtls directly for consistency
@@ -207,8 +262,11 @@ String generateMnemonicFromEntropy(const uint8_t* entropy, size_t length) {
         current_byte = entropy[byte_idx];
     } else { // Reading from checksum bits (only first cs_len bits matter)
         int cs_bit_idx = i - (length * 8); // Index within the checksum bits (0 to cs_len-1)
-        current_byte = cs_bits;
-        bit_in_byte = 7 - cs_bit_idx; // Bit position within the cs_bits byte
+        // We need to shift the cs_bits correctly to align the desired bit
+        // Example: cs_bits = 11110000. For cs_bit_idx=0, we need bit 7. For cs_bit_idx=3, we need bit 4.
+        int shift_amount = 7 - cs_bit_idx;
+        current_byte = cs_bits; // Use the checksum byte
+        bit_in_byte = shift_amount; // Directly use the calculated shift for the relevant bit
     }
 
     uint8_t bit_val = (current_byte >> bit_in_byte) & 1; // Extract the bit value
@@ -231,6 +289,7 @@ String generateMnemonicFromEntropy(const uint8_t* entropy, size_t length) {
   return mnemonic;
 }
 
+
 // ========================================
 // Display Functions
 // ========================================
@@ -247,7 +306,7 @@ void displayErrorScreen(String msg) {
         int pos = 0;
         while (pos < msg.length()) {
             int len = min((int)msg.length() - pos, maxChars);
-            // Word wrap logic
+            // Basic Word wrap logic
             if (pos + len < msg.length()) { // Check if not the end of the string
                 int lastSpace = -1;
                 // Find the last space within the proposed line length
@@ -257,16 +316,18 @@ void displayErrorScreen(String msg) {
                         break;
                     }
                 }
-                // If a space is found and breaking there doesn't leave a tiny word dangling, wrap at the space
-                if (lastSpace > 0 && (len - lastSpace < 10)) { // Avoid wrapping if only a few chars left
+                // If a space is found and breaking there doesn't make the line too short
+                if (lastSpace > 0) {
                     len = lastSpace;
+                } else if (len == maxChars) {
+                    // No space found, force break at maxChars
                 }
             }
             u8g2.drawStr(0, y, msg.substring(pos, pos + len).c_str());
             y += u8g2.getMaxCharHeight() + 2; // Move to next line
             pos += len;
             // Skip the space character at the beginning of the next line if we wrapped
-            if (pos < msg.length() && msg.charAt(pos) == ' ') {
+            while (pos < msg.length() && msg.charAt(pos) == ' ') {
                 pos++;
             }
             if (y > u8g2.getDisplayHeight() - 10) break; // Stop if out of screen space
@@ -383,7 +444,7 @@ void showPasswordEntryScreen() {
     do {
         // Title
         u8g2.setFont(u8g2_font_6x10_tr);
-        const char* title = "Enter KDP PIN";
+        const char* title = "Enter Wallet PIN"; // Changed title slightly
         int titleW = u8g2.getStrWidth(title);
         u8g2.drawStr(max(0,(u8g2.getDisplayWidth() - titleW) / 2), 10, title);
 
@@ -429,11 +490,11 @@ void showPasswordEntryScreen() {
     } while (u8g2.nextPage());
 }
 
-// --- Display Single QR Code --- (MODIFIED VERSION)
+// --- Display Single QR Code ---
 void displaySingleRotationQR(int rIdx, const String& qrText, const String& label, int qrVersion) {
     if (qrText.length() == 0) {
         Serial.println("E: Empty QR text provided to displaySingleRotationQR");
-        displayErrorScreen("QR Gen Error (Single)");
+        displayErrorScreen("QR Gen Error (Empty)");
         return;
     }
 
@@ -441,6 +502,12 @@ void displaySingleRotationQR(int rIdx, const String& qrText, const String& label
     QRCode qr;
     // Allocate buffer dynamically based on version to save stack
     size_t bufferSize = qrcode_getBufferSize(qrVersion);
+     // Check for reasonable buffer size to prevent excessive allocation
+    if (bufferSize == 0 || bufferSize > 2000) { // Adjust max size limit as needed
+         Serial.print("E: Invalid QR buffer size calculated: "); Serial.println(bufferSize);
+         displayErrorScreen("QR Buffer Size Error");
+         return;
+    }
     uint8_t *qrDataBuffer = (uint8_t *)malloc(bufferSize);
     if (!qrDataBuffer) {
          Serial.println("E: Failed to allocate QR buffer!");
@@ -452,6 +519,7 @@ void displaySingleRotationQR(int rIdx, const String& qrText, const String& label
     if (qrcode_initText(&qr, qrDataBuffer, qrVersion, eccLevel, qrText.c_str()) != 0) {
         Serial.print("E: Failed to initialize QR code (V"); Serial.print(qrVersion);
         Serial.print(") for: "); Serial.println(label);
+        Serial.print("E: QR Text Length: "); Serial.println(qrText.length());
         // Try a higher version? For now, display error.
         free(qrDataBuffer); // Free memory before displaying error
         displayErrorScreen("QR Init Fail V" + String(qrVersion));
@@ -475,7 +543,7 @@ void displaySingleRotationQR(int rIdx, const String& qrText, const String& label
 
     // Determine the largest pixel size that fits
     int pixelSize = 1;
-    if (qr.size > 0) { // Avoid division by zero
+    if (qr.size > 0 && availableHeight > 0) { // Avoid division by zero or negative height
         pixelSize = availableHeight / qr.size;
         if (pixelSize < 1) pixelSize = 1; // Minimum pixel size is 1
     }
@@ -499,7 +567,6 @@ void displaySingleRotationQR(int rIdx, const String& qrText, const String& label
     // Center the QR code horizontally
     int startX = max(horizontalMargin, (displayWidth - qrDrawSize) / 2);
     // Calculate QR vertical position (top edge)
-    // We need the actual title font height now
     u8g2.setFont(u8g2_font_6x10_tr); // Title font
     int titleAscent = u8g2.getAscent(); // Use ascent for baseline positioning
     int startY = titleAscent + topGap; // Position QR below the title baseline + gap
@@ -513,7 +580,6 @@ void displaySingleRotationQR(int rIdx, const String& qrText, const String& label
 
     // Calculate Y positions for other elements (baselines)
     int titleY = titleAscent; // Position title baseline at the top
-    // Hint Y baseline needs hint font height
     u8g2.setFont(u8g2_font_4x6_tr); // Hint font
     int hintsY = displayHeight - 1; // Position hints baseline just above the bottom
 
@@ -533,7 +599,12 @@ void displaySingleRotationQR(int rIdx, const String& qrText, const String& label
                     // Draw a rectangle (box) for each module for scaling
                     // Check bounds before drawing each pixel box
                     if (startX + x * pixelSize < displayWidth && startY + y * pixelSize < displayHeight) {
-                       u8g2.drawBox(startX + x * pixelSize, startY + y * pixelSize, pixelSize, pixelSize);
+                       // Check width/height too for pixelSize > 1
+                       if (startX + (x + 1) * pixelSize <= displayWidth && startY + (y + 1) * pixelSize <= displayHeight) {
+                            u8g2.drawBox(startX + x * pixelSize, startY + y * pixelSize, pixelSize, pixelSize);
+                       } else {
+                           // If box would exceed bounds, draw single pixel? Or skip? Skipping is safer.
+                       }
                     }
                 }
             }
@@ -546,7 +617,6 @@ void displaySingleRotationQR(int rIdx, const String& qrText, const String& label
         // Calculate label Y baseline position
         int labelY = startY + qrDrawSize + bottomGap + currentLabelAscent;
         // Ensure label fits vertically before drawing hints
-        // Use the height of the hint font (already set earlier) for check
         u8g2.setFont(u8g2_font_4x6_tr);
         int currentHintHeight = u8g2.getMaxCharHeight(); // Height needed for hints
         u8g2.setFont(u8g2_font_5x7_tr); // Switch back to label font for drawing
@@ -574,6 +644,7 @@ void displaySingleRotationQR(int rIdx, const String& qrText, const String& label
     Serial.println("----- Single QR Info Displayed -----");
     Serial.println("Rotation Index: " + String(rIdx));
     Serial.println("Displayed QR: " + label + " (V" + String(qrVersion) + ")");
+    // Serial.println("QR Text: " + qrText); // Uncomment for deep debug if needed
     Serial.println("-----------------------------------");
 }
 
@@ -591,7 +662,7 @@ void readButtons() {
     bool currentLeftState = (digitalRead(buttonLeft) == LOW);
     bool currentRightState = (digitalRead(buttonRight) == LOW);
 
-    // Debounce logic
+    // Debounce logic - Trigger on PRESS (transition from HIGH to LOW)
     if (currentTime - lastDebounceTime > debounceDelay) {
         // Check left button state change
         if (currentLeftState != prevButtonLeftState) {
@@ -600,8 +671,7 @@ void readButtons() {
                 Serial.println("DBG: Left Triggered"); // Debug
             }
             prevButtonLeftState = currentLeftState; // Update previous state
-             // Reset debounce timer only on state change
-            // lastDebounceTime = currentTime; // Optional: Reset timer on any change
+            lastDebounceTime = currentTime; // Reset timer on state change
         }
         // Check right button state change
         if (currentRightState != prevButtonRightState) {
@@ -610,26 +680,22 @@ void readButtons() {
                 Serial.println("DBG: Right Triggered"); // Debug
             }
             prevButtonRightState = currentRightState; // Update previous state
-             // Reset debounce timer only on state change
-            // lastDebounceTime = currentTime; // Optional: Reset timer on any change
+            lastDebounceTime = currentTime; // Reset timer on state change
         }
-         // Always update lastDebounceTime after checks if enough time passed
-         // This prevents rapid triggering if held down longer than debounceDelay
-        lastDebounceTime = currentTime;
     }
 
-
-    // Update the continuous pressed state variables
+    // Update the continuous pressed state variables *after* debounce check
     buttonLeftPressed = currentLeftState;
     buttonRightPressed = currentRightState;
 
     // Check for simultaneous press *after* individual triggers are determined
+    // Requires both buttons to be continuously held down
     if (buttonLeftPressed && buttonRightPressed) {
         bothButtonsHeld = true;
-         // Decide if 'both' overrides single triggers (comment out if not desired)
+         // Optional: Override single triggers if 'both' action is primary
         // buttonLeftTriggered = false;
         // buttonRightTriggered = false;
-         Serial.println("DBG: Both Held"); // Debug
+         // Serial.println("DBG: Both Held"); // Debug - can be noisy
     }
 }
 
@@ -648,15 +714,21 @@ void setup() {
   Serial.println("Setup: Button pins configured.");
 
   // Initialize Display
-  u8g2.begin();
-  Serial.println("Setup: U8G2 Initialized.");
-  u8g2.setContrast(100); // Adjust contrast if needed (0-255)
-  u8g2.firstPage();
-  do {
-    u8g2.setFont(u8g2_font_6x10_tr);
-    u8g2.drawStr(10,30,"Initializing...");
-  } while (u8g2.nextPage());
-  Serial.println("Setup: 'Initializing...' sent to display.");
+  if (!u8g2.begin()) {
+      Serial.println("!!! E: U8G2 Initialization Failed !!!");
+      // Optionally halt or try alternative I2C pins/address
+      while(1); // Halt execution
+  } else {
+      Serial.println("Setup: U8G2 Initialized.");
+      u8g2.setContrast(100); // Adjust contrast if needed (0-255)
+      u8g2.firstPage();
+      do {
+        u8g2.setFont(u8g2_font_6x10_tr);
+        u8g2.drawStr(10,30,"Initializing...");
+      } while (u8g2.nextPage());
+      Serial.println("Setup: 'Initializing...' sent to display.");
+  }
+
 
   // Initialize Password State
   memset(password, '_', PIN_LENGTH); // Fill with placeholder
@@ -664,19 +736,32 @@ void setup() {
   currentDigitIndex = 0;
   currentDigitValue = 0;
   passwordConfirmed = false;
-  kdp_as_int = 0;
   Serial.println("Setup: Password state initialized.");
 
-  // Check Provisioning Status (Read-Only)
+  // Preferences Initialization Check
+  if (!prefs.begin(PREFS_NAMESPACE, false)) { // Try read/write first
+       Serial.println("W: Setup: Failed to init Prefs (RW). Trying ReadOnly...");
+       if (!prefs.begin(PREFS_NAMESPACE, true)) {
+           Serial.println("!!! E: Setup: Failed to init Prefs (RO) as well. Storage issue? !!!");
+           // Display error? Halt? For now, proceed assuming no stored data.
+       } else {
+           Serial.println("Setup: Prefs opened ReadOnly.");
+           prefs.end(); // Close immediately if only checking read access
+       }
+  } else {
+       Serial.println("Setup: Prefs Initialized OK (RW).");
+       prefs.end(); // Close after check
+  }
+
+  // Check Provisioning Status (Read-Only) - Already done above implicitly, but good practice
   bool provisioned = false;
   if (prefs.begin(PREFS_NAMESPACE, true)) { // true = readOnly
       provisioned = prefs.getBool(PROVISIONED_KEY, false);
       prefs.end();
       Serial.print("Setup: Provisioned flag read = "); Serial.println(provisioned);
   } else {
-      Serial.println("W: Setup: Failed to open Prefs (RO). Assuming not provisioned.");
-      // If prefs fail to open even read-only, there might be a bigger issue
-      // For now, we assume not provisioned and proceed.
+      Serial.println("W: Setup: Failed to open Prefs (RO) again. Assuming not provisioned.");
+      // This case might indicate a more serious storage problem.
   }
 
   // Set Initial Application State
@@ -707,12 +792,13 @@ void loop() {
     case STATE_INITIALIZING:
         // This state should ideally not be re-entered after setup.
         Serial.println("W: Re-entered INITIALIZING state unexpectedly.");
-        errorMessage = "Init Error";
+        errorMessage = "Init Error Loop"; // More specific error
         displayErrorScreen(errorMessage); // Will change state to STATE_ERROR
         break;
 
     case STATE_SHOW_GENERATED_MNEMONIC:
-        displayGeneratedMnemonicScreen(generatedMnemonic); // Draws itself every loop while in this state
+        // This screen redraws itself every loop
+        displayGeneratedMnemonicScreen(generatedMnemonic);
 
         if (buttonRightTriggered) { // User confirms backup
             Serial.println("L: User confirmed mnemonic backup.");
@@ -758,12 +844,13 @@ void loop() {
                      redrawScreen = true; // Force redraw of wallet view on next loop iteration
                 } else { // Save failed
                     errorMessage = "Failed to save keys!";
-                    displayErrorScreen(errorMessage); // Show error, user stays on mnemonic screen
+                    displayErrorScreen(errorMessage); // Show error (state becomes ERROR)
+                    // User stays on mnemonic screen until button press, then goes to ERROR handling
                 }
             } else { // Failed to open Prefs for writing
                 Serial.println("!!! E: Failed to open Preferences for writing !!!");
                 errorMessage = "Storage Write Error!";
-                displayErrorScreen(errorMessage); // Show error, user stays on mnemonic screen
+                displayErrorScreen(errorMessage); // Show error (state becomes ERROR)
             }
         }
         break; // End STATE_SHOW_GENERATED_MNEMONIC
@@ -787,83 +874,76 @@ void loop() {
                 password[PIN_LENGTH] = '\0'; // Null-terminate the PIN string
                 Serial.print("L: Full PIN Entered: "); Serial.println("******"); // Avoid logging actual PIN
 
-                // Validate PIN format and convert to integer
-                if (!pinToInt(password, kdp_as_int)) {
-                    errorMessage = "Invalid PIN format."; Serial.println("E: PIN conversion failed (non-numeric or out of range).");
-                    displayErrorScreen(errorMessage); // Show error
-                    // Reset PIN state for re-entry after error acknowledged
-                    currentDigitIndex = 0; currentDigitValue = 0; memset(password, '_', PIN_LENGTH); password[PIN_LENGTH] = '\0'; kdp_as_int = 0; passwordConfirmed = false;
-                } else { // PIN format OK, proceed
-                    passwordConfirmed = true;
-                    Serial.println("L: PIN Confirmed and converted."); Serial.print("L: KDP int: "); Serial.println(kdp_as_int);
-                    Serial.println("L: Attempting to load existing mnemonic...");
-                    Serial.print("L: Heap Before Load/Gen: "); Serial.println(heap_caps_get_free_size(MALLOC_CAP_DEFAULT));
+                // PIN entered, mark as confirmed for derivation use
+                passwordConfirmed = true;
+                Serial.println("L: PIN Confirmed logically.");
+                Serial.println("L: Attempting to load existing mnemonic...");
+                Serial.print("L: Heap Before Load/Gen: "); Serial.println(heap_caps_get_free_size(MALLOC_CAP_DEFAULT));
 
-                    bool loadAttempted = false;
-                    bool loadSuccess = false;
-                    bool isProvisioned = false;
+                bool loadAttempted = false;
+                bool loadSuccess = false;
+                bool isProvisioned = false;
 
-                    // Try loading from Prefs (Read Only)
-                    if (prefs.begin(PREFS_NAMESPACE, true)) { // true = readOnly
-                        loadAttempted = true; Serial.println("L: Prefs opened (RO).");
-                        isProvisioned = prefs.getBool(PROVISIONED_KEY, false);
-                        Serial.print("L: Provisioned flag read = "); Serial.println(isProvisioned);
+                // Try loading from Prefs (Read Only)
+                if (prefs.begin(PREFS_NAMESPACE, true)) { // true = readOnly
+                    loadAttempted = true; Serial.println("L: Prefs opened (RO).");
+                    isProvisioned = prefs.getBool(PROVISIONED_KEY, false);
+                    Serial.print("L: Provisioned flag read = "); Serial.println(isProvisioned);
 
-                        if (isProvisioned && prefs.isKey(MNEMONIC_KEY)) {
-                            loadedMnemonic = prefs.getString(MNEMONIC_KEY, "");
-                            if (loadedMnemonic.length() > 10) { // Basic validity check
-                                loadSuccess = true; Serial.println("L: Existing Mnemonic loaded successfully.");
-                            } else {
-                                Serial.println("W: Provisioned flag set, but mnemonic empty/short in storage!");
-                                loadedMnemonic = ""; // Ensure it's empty if load failed
-                            }
-                        } else if (isProvisioned) {
-                            Serial.println("W: Provisioned flag set, but mnemonic key is missing in storage!");
+                    if (isProvisioned && prefs.isKey(MNEMONIC_KEY)) {
+                        loadedMnemonic = prefs.getString(MNEMONIC_KEY, "");
+                        if (loadedMnemonic.length() > 10) { // Basic validity check
+                            loadSuccess = true; Serial.println("L: Existing Mnemonic loaded successfully.");
                         } else {
-                            Serial.println("L: Device is not provisioned (flag missing or false). Should generate new keys.");
+                            Serial.println("W: Provisioned flag set, but mnemonic empty/short in storage!");
+                            loadedMnemonic = ""; // Ensure it's empty if load failed
                         }
-                        prefs.end(); Serial.println("L: Prefs closed.");
+                    } else if (isProvisioned) {
+                        Serial.println("W: Provisioned flag set, but mnemonic key is missing in storage!");
                     } else {
-                        Serial.println("!!! E: Failed to open Preferences (RO) for loading mnemonic !!!");
-                        // Treat as not provisioned if prefs can't be read
-                        isProvisioned = false;
-                        loadSuccess = false;
+                        Serial.println("L: Device is not provisioned (flag missing or false). Will generate new keys.");
                     }
+                    prefs.end(); Serial.println("L: Prefs closed.");
+                } else {
+                    Serial.println("!!! E: Failed to open Preferences (RO) for loading mnemonic !!!");
+                    // Treat as not provisioned if prefs can't be read
+                    isProvisioned = false;
+                    loadSuccess = false;
+                }
 
-                    // Decide next state based on load success
-                    if (loadSuccess) { // Go directly to wallet view
-                        currentState = STATE_WALLET_VIEW;
-                        currentRotationIndex = 0; // Start at rotation 0
-                        selectedQRIndex = 0;      // Start showing Address QR
-                        currentWalletMode = MODE_SINGLE_QR; // Set wallet mode
-                        Serial.println("L: Set state STATE_WALLET_VIEW (from loaded mnemonic).");
-                        redrawScreen = true; // Force wallet redraw ONCE on state change
-                    } else { // Need to generate new keys (first boot or load failed)
-                        Serial.println("L: Load failed or first boot. Generating new keys...");
-                        uint8_t entropy[16]; // 128 bits for 12 words
-                        esp_fill_random(entropy, sizeof(entropy)); // Use ESP32 Hardware RNG
-                        Serial.print("L: Generated Entropy: "); for(int i=0; i<sizeof(entropy); i++) { if(entropy[i]<0x10) Serial.print("0"); Serial.print(entropy[i], HEX); } Serial.println();
+                // Decide next state based on load success
+                if (loadSuccess) { // Go directly to wallet view
+                    currentState = STATE_WALLET_VIEW;
+                    currentRotationIndex = 0; // Start at rotation 0
+                    selectedQRIndex = 0;      // Start showing Address QR
+                    currentWalletMode = MODE_SINGLE_QR; // Set wallet mode
+                    Serial.println("L: Set state STATE_WALLET_VIEW (from loaded mnemonic).");
+                    redrawScreen = true; // Force wallet redraw ONCE on state change
+                } else { // Need to generate new keys (first boot or load failed)
+                    Serial.println("L: Load failed or first boot. Generating new keys...");
+                    uint8_t entropy[16]; // 128 bits for 12 words
+                    esp_fill_random(entropy, sizeof(entropy)); // Use ESP32 Hardware RNG
+                    Serial.print("L: Generated Entropy: "); for(int i=0; i<sizeof(entropy); i++) { if(entropy[i]<0x10) Serial.print("0"); Serial.print(entropy[i], HEX); } Serial.println();
 
-                        generatedMnemonic = generateMnemonicFromEntropy(entropy, sizeof(entropy));
+                    generatedMnemonic = generateMnemonicFromEntropy(entropy, sizeof(entropy));
 
-                        if (generatedMnemonic.length() > 0) {
-                            Serial.println("L: Mnemonic generated successfully (post-PIN entry).");
-                            currentState = STATE_SHOW_GENERATED_MNEMONIC; // Go to backup screen
-                            Serial.println("L: Set state STATE_SHOW_GENERATED_MNEMONIC.");
-                            redrawScreen = true; // Force mnemonic screen redraw ONCE
-                        } else { // Mnemonic generation failed
-                            errorMessage = "Key Generation Failed!"; Serial.println("!!! E: Failed post-PIN mnemonic generation !!!");
-                            displayErrorScreen(errorMessage);
-                            // Reset PIN state? Maybe just show error and let user retry PIN?
-                            // For now, resetting PIN state after error acknowledged.
-                           passwordConfirmed = false; currentDigitIndex = 0; currentDigitValue = 0; memset(password, '_', PIN_LENGTH); password[PIN_LENGTH] = '\0'; kdp_as_int = 0; loadedMnemonic = ""; generatedMnemonic = "";
-                        }
+                    if (generatedMnemonic.length() > 0) {
+                        Serial.println("L: Mnemonic generated successfully (post-PIN entry).");
+                        currentState = STATE_SHOW_GENERATED_MNEMONIC; // Go to backup screen
+                        Serial.println("L: Set state STATE_SHOW_GENERATED_MNEMONIC.");
+                        redrawScreen = true; // Force mnemonic screen redraw ONCE
+                    } else { // Mnemonic generation failed
+                        errorMessage = "Key Generation Failed!"; Serial.println("!!! E: Failed post-PIN mnemonic generation !!!");
+                        displayErrorScreen(errorMessage);
+                        // Reset PIN state after error acknowledged.
+                        passwordConfirmed = false; currentDigitIndex = 0; currentDigitValue = 0; memset(password, '_', PIN_LENGTH); password[PIN_LENGTH] = '\0'; loadedMnemonic = ""; generatedMnemonic = "";
                     }
-                    Serial.print("L: Heap After Load/Gen: "); Serial.println(heap_caps_get_free_size(MALLOC_CAP_DEFAULT));
-                } // End PIN format OK
+                }
+                Serial.print("L: Heap After Load/Gen: "); Serial.println(heap_caps_get_free_size(MALLOC_CAP_DEFAULT));
+
             } else { // Not the last digit yet, move to the next digit
                 currentDigitValue = 0; // Reset the selector for the *next* digit position
-                 Serial.println("L: Advance to next digit"); // Debug
+                Serial.println("L: Advance to next digit"); // Debug
                 // No need to set redrawScreen = true, screen updates next loop.
             }
         } // End buttonRightTriggered
@@ -874,14 +954,24 @@ void loop() {
 
         // Check for dual press first (Show Mnemonic)
         if (bothButtonsHeld) {
-            Serial.println("L: Both buttons detected, showing secret mnemonic.");
-            currentState = STATE_SHOW_SECRET_MNEMONIC;
-            redrawScreen = true; // Request redraw of the secret screen
-            break; // Exit this case immediately
+             // Add a small delay or check mechanism to ensure it wasn't just a quick simultaneous press
+             unsigned long holdStartTime = millis();
+             while(digitalRead(buttonLeft) == LOW && digitalRead(buttonRight) == LOW) {
+                 if (millis() - holdStartTime > 500) { // Require hold for 500ms
+                     Serial.println("L: Both buttons held > 500ms, showing secret mnemonic.");
+                     currentState = STATE_SHOW_SECRET_MNEMONIC;
+                     redrawScreen = true; // Request redraw of the secret screen
+                     goto end_wallet_view_case; // Use goto to exit cleanly after setting state
+                 }
+                 delay(10); // Small delay while checking hold
+             }
+             // If loop finishes without reaching threshold, it was likely a quick press, ignore 'both'
+             Serial.println("DBG: Both buttons quick press, ignoring.");
         }
 
-        // Handle single button presses for QR/Rotation cycling
-        if (buttonLeftTriggered) {
+
+        // Handle single button presses for QR/Rotation cycling (only if not both held)
+        if (!bothButtonsHeld && buttonLeftTriggered) {
             selectedQRIndex--; // Go to previous QR item (Address -> H(H+2) -> H(+1) -> Address...)
             if (selectedQRIndex < 0) { // Was showing Address (index 0), wrap around QR and go to PREVIOUS rotation
                 selectedQRIndex = 2; // Wrap around to show H(H(Pk+2))
@@ -896,7 +986,7 @@ void loop() {
             Serial.print("L: Wallet View: Selected QR Index -> "); Serial.println(selectedQRIndex);
             walletNeedsRedraw = true; // Need to recalculate and redraw the new view
         }
-        else if (buttonRightTriggered) {
+        else if (!bothButtonsHeld && buttonRightTriggered) {
             selectedQRIndex++; // Go to next QR item (Address -> H(+1) -> H(H+2) -> Address...)
             if (selectedQRIndex > 2) { // Was showing H(H(Pk+2)) (index 2), wrap around QR and go to NEXT rotation
                 selectedQRIndex = 0; // Wrap around to show Address
@@ -919,44 +1009,66 @@ void loop() {
              if (!passwordConfirmed) { errorMessage = "PIN Not Confirmed!"; Serial.println("E: Entered Wallet View without PIN confirmed!"); displayErrorScreen(errorMessage); break; }
              password[PIN_LENGTH] = '\0'; // Ensure PIN is null-terminated
 
-             // --- Derive Master Key ---
-             // Consider adding error checking for Mainnet object if necessary
-             HDPrivateKey hdMasterKey(loadedMnemonic, password, &Mainnet);
-             if (!hdMasterKey.isValid()) { errorMessage = "Invalid PIN/Mnemonic!"; Serial.println("E: Master Key Initialization Failed. Check PIN/Mnemonic."); displayErrorScreen(errorMessage); break; }
+             // --- Derive Master Key (using empty "" passphrase, PIN used for path derivation) ---
+             HDPrivateKey hdMasterKey(loadedMnemonic, "", &Mainnet); // Use empty string "" as BIP39 passphrase
+             if (!hdMasterKey.isValid()) { errorMessage = "Master Key Deriv Fail"; Serial.println("E: Master Key Initialization Failed (Mnemonic/Library issue?)."); displayErrorScreen(errorMessage); break; }
+             Serial.println("L: Master Key derived successfully.");
 
-             // --- Define Derivation Paths ---
-             // BIP44-like structure: m / purpose' / coin_type' / account' / change / address_index
-             // Using purpose' = 83696968' (YADA ASCII -> Decimal), coin_type' = 39' (YADA Atomic Number)
-             // account' = KDP PIN, change = 0 (external), address_index = rotationIndex
-             // m/83696968'/39'/<kdp_as_int>'/<rotationIndex>' -> Current PubKey Pk(i)
-             // m/83696968'/39'/<kdp_as_int>'/<rotationIndex+1>' -> Prerotated PubKey Pk(i+1)
-             // m/83696968'/39'/<kdp_as_int>'/<rotationIndex+2>' -> Twice Prerotated PubKey Pk(i+2)
-             // NOTE: The library might handle the ' automatically, double check its derive() method. Assuming it does.
-             String basePath = "m/83696968'/39'/" + String(kdp_as_int) + "'"; // Base path includes KDP
-             String path_current = basePath + "/" + String(currentRotationIndex) + "'";
-             String path_prerotated = basePath + "/" + String(currentRotationIndex + 1) + "'";
-             String path_twice_prerotated = basePath + "/" + String(currentRotationIndex + 2) + "'";
+             // --- Calculate the 4-Level Password-Dependent Path ---
+             String passwordBasePath = "m";
+             for (int level = 0; level < 4; ++level) {
+                 uint32_t index = deriveIndexCpp(password, level); // Use the confirmed PIN string
+                 passwordBasePath += "/" + String(index) + "'"; // Append hardened index
+             }
+             Serial.print("L: Derived Password Base Path: "); Serial.println(passwordBasePath);
+
+             // --- Derive the Node Based on the Password Path ---
+             HDPrivateKey passwordNode = hdMasterKey.derive(passwordBasePath.c_str());
+             if (!passwordNode.isValid()) {
+                 errorMessage = "Password Node Deriv Fail";
+                 Serial.print("E: Failed to derive password-based node using path: "); Serial.println(passwordBasePath);
+                 displayErrorScreen(errorMessage);
+                 break; // Exit wallet view state -> Error state
+             }
+             Serial.println("L: Password Node derived successfully.");
+             Serial.print("L: Heap After Password Node: "); Serial.println(heap_caps_get_free_size(MALLOC_CAP_DEFAULT));
+
+
+             // --- Define Derivation Paths RELATIVE to the passwordNode ---
+             // Using standard external chain (0) and address index = rotationIndex
+             // These are NON-HARDENED relative paths.
+             String path_current_rel = "0/" + String(currentRotationIndex);
+             String path_prerotated_rel = "0/" + String(currentRotationIndex + 1);
+             String path_twice_prerotated_rel = "0/" + String(currentRotationIndex + 2);
 
              // --- Declare variables for ALL potential display data ---
              String current_address = "";
              String prerotated_pubkey_hash = "";      // H(Pk(i+1))
              String twice_prerotated_pubkey_hash = ""; // H(H(Pk(i+2)))
 
-             // --- Perform ALL Calculations (can be slow, happens only on redraw) ---
+             // --- Perform ALL Calculations (Deriving from passwordNode) ---
              bool calculation_ok = true; // Flag to track if all calculations succeed
              String calculation_error_msg = ""; // Store specific error
 
              { // Scope for derived keys to limit their lifetime and free memory sooner
-                 HDPrivateKey key_current = hdMasterKey.derive(path_current.c_str());
-                 HDPrivateKey key_prerotated = hdMasterKey.derive(path_prerotated.c_str());
-                 HDPrivateKey key_twice_prerotated = hdMasterKey.derive(path_twice_prerotated.c_str());
+                 HDPrivateKey key_current = passwordNode.derive(path_current_rel.c_str());
+                 HDPrivateKey key_prerotated = passwordNode.derive(path_prerotated_rel.c_str());
+                 HDPrivateKey key_twice_prerotated = passwordNode.derive(path_twice_prerotated_rel.c_str());
 
                  // Check if derivations were successful
-                 if (!key_current.isValid() || !key_prerotated.isValid() || !key_twice_prerotated.isValid()) {
-                      calculation_error_msg = "Key derivation fail R" + String(currentRotationIndex);
-                      Serial.println("E: Key derivation failed. Path issue?");
-                      calculation_ok = false;
+                 if (!key_current.isValid()) {
+                      calculation_error_msg = "Rel Key Deriv Fail R" + String(currentRotationIndex);
+                      Serial.println("E: " + calculation_error_msg + " Path: " + path_current_rel); calculation_ok = false;
                  }
+                 if (calculation_ok && !key_prerotated.isValid()) {
+                      calculation_error_msg = "Rel Key Deriv Fail R" + String(currentRotationIndex+1);
+                      Serial.println("E: " + calculation_error_msg + " Path: " + path_prerotated_rel); calculation_ok = false;
+                 }
+                  if (calculation_ok && !key_twice_prerotated.isValid()) {
+                      calculation_error_msg = "Rel Key Deriv Fail R" + String(currentRotationIndex+2);
+                      Serial.println("E: " + calculation_error_msg + " Path: " + path_twice_prerotated_rel); calculation_ok = false;
+                 }
+
 
                  // 1. Calculate Current Address: Pk(i) -> Address
                  if (calculation_ok) {
@@ -964,7 +1076,7 @@ void loop() {
                     if (!pk_current.isValid()) {
                         calculation_error_msg = "Invalid Pk(i)"; Serial.println("E: "+ calculation_error_msg); calculation_ok = false;
                     } else {
-                        current_address = pk_current.address();
+                        current_address = pk_current.address(&Mainnet); // Specify network for address format
                         if (current_address.length() == 0) {
                             calculation_error_msg = "Addr Gen Fail R" + String(currentRotationIndex);
                             Serial.println("E: Address generation from Pk(i) failed."); calculation_ok = false;
@@ -982,6 +1094,9 @@ void loop() {
                         if (prerotated_pubkey_hash.startsWith("Hashing Error")) {
                             calculation_error_msg = "Error Hashing Pk(i+1)";
                             Serial.println("E: " + calculation_error_msg); calculation_ok = false;
+                        } else if (prerotated_pubkey_hash.length() != 64) { // SHA-256 hash must be 64 hex chars
+                            calculation_error_msg = "Invalid H(Pk+1) Len";
+                            Serial.print("E: " + calculation_error_msg + " Got: "); Serial.println(prerotated_pubkey_hash); calculation_ok = false;
                         }
                     }
                  }
@@ -1005,6 +1120,10 @@ void loop() {
                                  bool conversion_ok = true;
                                  for (size_t i = 0; i < pk_len; i++) {
                                      unsigned int byteValue;
+                                     if ((i * 2 + 1) >= pk_twice_hex.length()) { // Bounds check
+                                         Serial.println("E: Hex string index out of bounds for Pk(i+2) bytes");
+                                         calculation_error_msg = "Hex Idx Err H(H)"; conversion_ok = false; break;
+                                     }
                                      if (sscanf(pk_twice_hex.substring(i * 2, i * 2 + 2).c_str(), "%x", &byteValue) != 1) {
                                          Serial.println("E: Hex conversion error for Pk(i+2) bytes");
                                          calculation_error_msg = "Hex Conv Err H(H)"; conversion_ok = false; break;
@@ -1021,18 +1140,16 @@ void loop() {
                                          if (sha256Raw(first_hash, 32, second_hash)) {
                                              // Convert the final raw hash H(H(Pk(i+2))) to hex string
                                              twice_prerotated_pubkey_hash = bytesToHex(second_hash, 32);
+                                             if (twice_prerotated_pubkey_hash.length() != 64) { // Validate length
+                                                calculation_error_msg = "Invalid H(H) Len";
+                                                Serial.print("E: " + calculation_error_msg + " Got: "); Serial.println(twice_prerotated_pubkey_hash); calculation_ok = false;
+                                             }
                                          } else { Serial.println("E: Second SHA256 failed for H(H(Pk(i+2)))"); calculation_error_msg = "Hashing Error (H2)"; calculation_ok = false; }
                                      } else { Serial.println("E: First SHA256 failed for H(H(Pk(i+2)))"); calculation_error_msg = "Hashing Error (H1)"; calculation_ok = false; }
                                  } else {
                                       calculation_ok = false; // Error already set during hex conversion
                                  }
                                  free(pk_bytes); // Free the allocated Pk(i+2) buffer
-
-                                 // Final check if H(H) result string is valid after calculations
-                                 if (calculation_ok && twice_prerotated_pubkey_hash.length() == 0) {
-                                      if (calculation_error_msg.length() == 0) calculation_error_msg = "H(H) Calc Result Empty";
-                                      Serial.println("E: Failed to calculate H(H(Pk(i+2))) - result empty"); calculation_ok = false;
-                                 }
                              } // end else !pk_bytes (mem alloc ok)
                          } else { // Invalid hex string length for Pk(i+2)
                               calculation_error_msg = "Invalid Pk(i+2) Hex Len"; Serial.println("E: "+ calculation_error_msg + " Len=" + pk_twice_hex.length()); calculation_ok = false;
@@ -1047,13 +1164,15 @@ void loop() {
                  // Call the display function based on which QR is currently selected
                  switch (selectedQRIndex) {
                      case 0: // Display Address QR
-                         displaySingleRotationQR(currentRotationIndex, current_address, "Address", 3); // Use V3 for typical Bitcoin addresses
+                         // Determine QR version based on address length? Bitcoin addresses are usually short enough for V3-V5
+                         // Let's try V4 as a general guess, might need adjustment based on actual address length/format
+                         displaySingleRotationQR(currentRotationIndex, current_address, "Address", 4);
                          break;
-                     case 1: // Display H(Pk+1) QR
-                         displaySingleRotationQR(currentRotationIndex, prerotated_pubkey_hash, "H(Pk+1)", 5); // Use V5 for 64-char hex hashes
+                     case 1: // Display H(Pk+1) QR (64 hex chars = 32 bytes -> QR V5 is reasonable)
+                         displaySingleRotationQR(currentRotationIndex, prerotated_pubkey_hash, "H(Pk+1)", 5);
                          break;
-                     case 2: // Display H(H(Pk+2)) QR
-                         displaySingleRotationQR(currentRotationIndex, twice_prerotated_pubkey_hash, "H(H(Pk+2))", 5); // Use V5 for 64-char hex hashes
+                     case 2: // Display H(H(Pk+2)) QR (64 hex chars = 32 bytes -> QR V5 is reasonable)
+                         displaySingleRotationQR(currentRotationIndex, twice_prerotated_pubkey_hash, "H(H(Pk+2))", 5);
                          break;
                      default: // Should not happen
                          Serial.print("E: Invalid selectedQRIndex: "); Serial.println(selectedQRIndex);
@@ -1067,11 +1186,13 @@ void loop() {
              }
 
              Serial.print("L: Heap Wallet Draw End: "); Serial.println(heap_caps_get_free_size(MALLOC_CAP_DEFAULT));
-             // redrawScreen = false; // Reset the flag as redraw is complete -- Handled below now
         } // End if(walletNeedsRedraw)
 
         // Reset the redraw flag AFTER potential drawing is done for this loop iteration
         if (redrawScreen) redrawScreen = false;
+
+        // Label for goto statement
+        end_wallet_view_case:;
 
         break; // End STATE_WALLET_VIEW
       } // End scope for STATE_WALLET_VIEW case
@@ -1099,9 +1220,8 @@ void loop() {
             currentState = STATE_PASSWORD_ENTRY;
             currentDigitIndex = 0;
             currentDigitValue = 0;
-            passwordConfirmed = false;
+            passwordConfirmed = false; // Crucial: Reset password confirmation
             memset(password, '_', PIN_LENGTH); password[PIN_LENGTH] = '\0';
-            kdp_as_int = 0;
             errorMessage = ""; // Clear error message
             redrawScreen = true; // Force redraw of password entry screen on next loop
             Serial.println("L: Reset state to STATE_PASSWORD_ENTRY.");
@@ -1117,5 +1237,5 @@ void loop() {
 
   } // End of switch(currentState)
 
-  delay(10); // Small delay to prevent excessive CPU usage and allow stable button reads
+  delay(20); // Slightly increased delay for stability, adjust if needed
 } // End of loop()

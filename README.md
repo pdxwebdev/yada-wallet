@@ -32,7 +32,7 @@ Boards Manager → ESP32 by Espressif
 
 Select ESP32 Dev Module
 
-Clone repo → open yada_hw_wallet.ino
+Clone repo → open YADA.ino
 
 Add libraries (Library Manager):
 

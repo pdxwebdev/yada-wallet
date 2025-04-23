@@ -42,7 +42,6 @@ Copy bip39_wordlist.h next to the sketch
 
 Compile & Upload @ 921 600 baud
 
-Using PlatformIO? See platformio.ini.
 
 First‑boot cheat‑sheet
 

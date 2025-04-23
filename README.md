@@ -26,10 +26,6 @@ ESP32‑2432S028R (ILI9341 + XPT2046)
 
 Any ESP32 DevKit + matching TFT/touch
 
-⚠ edit pins
-
-Pin defs are hard‑coded in #define—adjust if your wiring differs.
-
 Install & Flash (Arduino IDE)
 
 Boards Manager → ESP32 by Espressif

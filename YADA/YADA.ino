@@ -46,7 +46,7 @@ TFT_eSPI_Button buttons[MAX_BUTTONS];
 
 // Define button IDs (Based on HORIZONTAL layout + Secret)
 #define BTN_LEFT   0 // Cycle/Back/Prev/OK (Bottom Left drawn -> Touch X=65, Y=205)
-#define BTN_RIGHT  1 // Next/Confirm (Bottom Right drawn -> Touch X=35, Y=45)
+#define BTN_RIGHT  1 // Next/Confirm (Bottom Right drawn -> Touch X=35, Y=45) // Note: touch mapping for this is TOP-LEFT in main loop
 #define BTN_SECRET 2 // Show Secret Mnemonic (Top Right Drawn -> Touch X=300, Y=20)
 #define BTN_OK     0
 #define BTN_BACK   0
@@ -83,10 +83,7 @@ bool passwordConfirmed = false;
 
 // --- Wallet View State ---
 int currentRotationIndex = 0;
-const int MAX_ROTATION_INDEX = 1000;
-// enum WalletDisplayMode { MODE_SINGLE_QR }; // No longer needed
-// WalletDisplayMode currentWalletMode = MODE_SINGLE_QR; // No longer needed
-// int selectedQRIndex = 0; // No longer needed for display type
+const int MAX_ROTATION_INDEX = 1000; // Max address index m/0/MAX_ROTATION_INDEX
 
 // ========================================
 // Crypto & Utility Functions (UNCHANGED)
@@ -120,10 +117,10 @@ void displayGeneratedMnemonicScreen(String m) {
     tft.setTextDatum(TL_DATUM); tft.setTextSize(1); tft.setTextFont(2);
     int wc=0; String cw=""; String tM=m+" "; int xS=15, yS=55, cW=tft.width()/3-5, lH=tft.fontHeight(2)+3; int xP=xS, yP=yS;
     for(int i=0;i<tM.length();i++){char c=tM.charAt(i); if(c==' '){if(cw.length()>0){wc++; String wn=String(wc)+"."; tft.setTextColor(TFT_CYAN); tft.drawString(wn,xP,yP); tft.setTextColor(TFT_WHITE); tft.drawString(cw,xP+tft.textWidth("XX."),yP); cw=""; yP+=lH; if(wc%4==0){xP+=cW; yP=yS;} if(wc>=12)break;}} else cw+=c;}
-    int confirmButtonCenterX = 255; // Bottom Right X
-    int confirmButtonCenterY = 205; // Bottom Right Y
-    buttons[BTN_RIGHT].initButton(&tft, confirmButtonCenterX, confirmButtonCenterY, BUTTON_W+40, BUTTON_H, TFT_WHITE, TFT_GREEN, TFT_BLACK, "Backed Up", 2);
-    buttons[BTN_RIGHT].drawButton(); // Explicitly draw only this button
+    int confirmButtonCenterX = 255; // Bottom Right X (drawing coordinates)
+    int confirmButtonCenterY = 205; // Bottom Right Y (drawing coordinates)
+    buttons[BTN_CONFIRM].initButton(&tft, confirmButtonCenterX, confirmButtonCenterY, BUTTON_W+40, BUTTON_H, TFT_WHITE, TFT_GREEN, TFT_BLACK, "Backed Up", 2);
+    buttons[BTN_CONFIRM].drawButton();
 }
 
 
@@ -159,24 +156,24 @@ void showPasswordEntryScreen() {
     }
     char nextLabel[5] = "Next"; if (currentDigitIndex == PIN_LENGTH - 1) { strcpy(nextLabel, "OK"); }
 
-    // --- Button Initialization - FINAL - Buttons Drawn Horizontally ---
-    int leftButtonCenterX = 65;
-    int leftButtonCenterY = 205;
-    int rightButtonCenterX = 255; // DRAWN here (bottom right)
-    int rightButtonCenterY = 205;
+    int leftButtonCenterX = 65;     // Bottom Left X (drawing coordinates)
+    int leftButtonCenterY = 205;    // Bottom Left Y (drawing coordinates)
+    int rightButtonCenterX = 255;   // Bottom Right X (drawing coordinates)
+    int rightButtonCenterY = 205;   // Bottom Right Y (drawing coordinates)
 
-    buttons[BTN_LEFT].initButton(&tft, leftButtonCenterX, leftButtonCenterY, BUTTON_W, BUTTON_H, TFT_WHITE, TFT_BLUE, TFT_BLACK, "Cycle", 2);
-    buttons[BTN_RIGHT].initButton(&tft, rightButtonCenterX, rightButtonCenterY, BUTTON_W, BUTTON_H, TFT_WHITE, TFT_GREEN, TFT_BLACK, nextLabel, 2);
+    buttons[BTN_CYCLE].initButton(&tft, leftButtonCenterX, leftButtonCenterY, BUTTON_W, BUTTON_H, TFT_WHITE, TFT_BLUE, TFT_BLACK, "Cycle", 2);
+    buttons[BTN_NEXT].initButton(&tft, rightButtonCenterX, rightButtonCenterY, BUTTON_W, BUTTON_H, TFT_WHITE, TFT_GREEN, TFT_BLACK, nextLabel, 2);
     drawButtons(2);
 }
 
 // --- Display Single QR Code (Combined Data + Maximized Size + FINAL Buttons + Secret Button) ---
 void displaySingleRotationQR(int rIdx, const String& combinedQRData, const String& label, int qrVersion) {
     if(combinedQRData.length() == 0){ displayErrorScreen("QR Gen Error (Empty)"); return; }
-    const int eccLevel = ECC_LOW; // Try LOW ECC for potentially larger modules
+    const int eccLevel = ECC_LOW;
     QRCode qr;
     size_t bufferSize = qrcode_getBufferSize(qrVersion);
-    if (bufferSize == 0 || bufferSize > 3500) {
+    if (bufferSize == 0 || bufferSize > 3500) { // uBitcoin QR Code Buffer Size limit might be different, check library for actual limits if issues persist
+        Serial.printf("E: QR Buffer Size Error V%d, Size: %u\n", qrVersion, bufferSize);
         displayErrorScreen("QR Buffer Size Error V" + String(qrVersion));
         return;
     }
@@ -186,10 +183,10 @@ void displaySingleRotationQR(int rIdx, const String& combinedQRData, const Strin
     if (qrcode_initText(&qr, qrDataBuffer, qrVersion, eccLevel, combinedQRData.c_str()) != 0) {
         Serial.printf("E: QR Init Fail V%d L=%d %s\n",qrVersion, combinedQRData.length(), label.c_str());
         int nextVersion = qrVersion + 1;
-        if(nextVersion <= 13) { // Allow retry up to higher version
+        if(nextVersion <= 13) { // Max typical QR for this display size/complexity
             Serial.println("Trying V"+String(nextVersion));
             free(qrDataBuffer);
-            displaySingleRotationQR(rIdx, combinedQRData, label, nextVersion);
+            displaySingleRotationQR(rIdx, combinedQRData, label, nextVersion); // Recursive call with higher version
             return;
         } else {
             free(qrDataBuffer);
@@ -198,7 +195,6 @@ void displaySingleRotationQR(int rIdx, const String& combinedQRData, const Strin
         }
     }
 
-    // --- Layout Calculation - Revised to Maximize QR Size ---
     tft.fillScreen(TFT_WHITE);
     tft.setTextColor(TFT_BLACK, TFT_WHITE);
 
@@ -217,21 +213,18 @@ void displaySingleRotationQR(int rIdx, const String& combinedQRData, const Strin
         int pixelSizeH = availableHeight / qr.size;
         pixelSize = min(pixelSizeW, pixelSizeH);
         if (pixelSize < 1) pixelSize = 1;
-        pixelSize = min(pixelSize, 3); // Set a reasonable max pixel size (e.g., 3x3)
-        // Serial.printf("L: QR Display - Size:%dx%d, Avail W:%d H:%d -> PixelSize:%d\n", qr.size, qr.size, availableWidth, availableHeight, pixelSize); // Optional Log
+        pixelSize = min(pixelSize, 3);
     }
 
     int qrDrawSize = qr.size * pixelSize;
     int startX = sideMargin + (availableWidth - qrDrawSize) / 2;
     int startY = topMargin + titleHeight + (availableHeight - qrDrawSize) / 2;
 
-    // --- Drawing ---
     tft.setTextDatum(TC_DATUM);
-    tft.setTextSize(1); // Smaller Title Font
-    String tit="Rotation: "+String(rIdx) + " (" + label + ")";
-    tft.drawString(tit, tft.width()/2, topMargin, 2); // Font 2
+    tft.setTextSize(1);
+    String tit = label + ": " + String(rIdx); // Changed label order
+    tft.drawString(tit, tft.width()/2, topMargin, 2);
 
-    // Draw QR Code
     for (uint8_t y = 0; y < qr.size; y++) {
         for (uint8_t x = 0; x < qr.size; x++) {
             if (qrcode_getModule(&qr, x, y)) {
@@ -241,13 +234,12 @@ void displaySingleRotationQR(int rIdx, const String& combinedQRData, const Strin
         }
     }
 
-    // --- Button Positions - FINAL Horizontal + Secret Button ---
-    int leftButtonCenterX = 65;
-    int leftButtonCenterY = 205;
-    int rightButtonCenterX = 255; // DRAWN here
-    int rightButtonCenterY = 205;
-    int secretButtonCenterX = tft.width() - (SECRET_BUTTON_SIZE / 2) - 5;
-    int secretButtonCenterY = (SECRET_BUTTON_SIZE / 2) + 5;
+    int leftButtonCenterX = 65;     // Bottom Left X (drawing coordinates)
+    int leftButtonCenterY = 205;    // Bottom Left Y (drawing coordinates)
+    int rightButtonCenterX = 255;   // Bottom Right X (drawing coordinates)
+    int rightButtonCenterY = 205;   // Bottom Right Y (drawing coordinates)
+    int secretButtonCenterX = tft.width() - (SECRET_BUTTON_SIZE / 2) - 5; // Top Right X
+    int secretButtonCenterY = (SECRET_BUTTON_SIZE / 2) + 5;               // Top Right Y
 
     buttons[BTN_LEFT].initButton(&tft, leftButtonCenterX, leftButtonCenterY, BUTTON_W, BUTTON_H, TFT_WHITE, TFT_BLUE, TFT_BLACK, "< Prev", 2);
     buttons[BTN_RIGHT].initButton(&tft, rightButtonCenterX, rightButtonCenterY, BUTTON_W, BUTTON_H, TFT_WHITE, TFT_BLUE, TFT_BLACK, "Next >", 2);
@@ -258,7 +250,7 @@ void displaySingleRotationQR(int rIdx, const String& combinedQRData, const Strin
 
 
 // ========================================
-// Touch Button Handling Function (FINAL MAPPING + MANUAL BOUNDS CHECK - Cleaned)
+// Touch Button Handling Function
 // ========================================
 void readButtons() {
     uint16_t t_x = 0, t_y = 0;
@@ -275,46 +267,44 @@ void readButtons() {
     bool currentRightContainsManual = false;
     bool currentSecretContainsManual = false;
 
-
     if (pressed) {
         TS_Point p = ts.getPoint();
-        // --- Final Mapping (Rot 3, Inv X, Inv Y) ---
-        t_x = map(p.y, 338, 3739, tft.width(), 0);   // Raw Y -> Screen X (Inverted)
-        t_y = map(p.x, 414, 3857, tft.height(), 0); // Raw X -> Screen Y (Inverted)
-        // --- End Mapping ---
+        // Rotation 3, Inverted X, Inverted Y from observed values
+        t_x = map(p.y, 338, 3739, tft.width(), 0);
+        t_y = map(p.x, 414, 3857, tft.height(), 0);
 
         if (!touchIsBeingHeld) {
             touchIsBeingHeld = true; touchHoldStartTime = millis();
         }
 
-        // --- MANUAL BOUNDS CHECK based on observed touch coordinates ---
+        // --- MANUAL BOUNDS CHECK based on observed touch coordinates for Rot 3 ---
+        // These are the *actual touch coordinates* after mapping
+        // Bottom-Left Area (BTN_LEFT: Cycle/Prev/Back/OK)
         int leftBtnL = 15; int leftBtnR = 115; int leftBtnT = 180; int leftBtnB = 230;
         if (t_x >= leftBtnL && t_x <= leftBtnR && t_y >= leftBtnT && t_y <= leftBtnB) {
              currentLeftContainsManual = true;
-        } else { currentLeftContainsManual = false; }
+        }
 
-        int rightBtnL = -15; int rightBtnR = 85; int rightBtnT = 20; int rightBtnB = 70; // Top Left Area
+        // Top-Left Area (BTN_RIGHT: Next/Confirm) - THIS IS AN IMPORTANT MAPPING.
+        // The button is *drawn* bottom-right on some screens, but this touch area corresponds to it.
+        int rightBtnL = -15; int rightBtnR = 85; int rightBtnT = 20; int rightBtnB = 70;
          if (t_x >= rightBtnL && t_x <= rightBtnR && t_y >= rightBtnT && t_y <= rightBtnB) {
              currentRightContainsManual = true;
-        } else { currentRightContainsManual = false; }
+        }
 
-        int secretBtnL = 282; int secretBtnR = 318; int secretBtnT = 2; int secretBtnB = 38; // Top Right Area
+        // Top-Right Area (BTN_SECRET)
+        int secretBtnL = 282; int secretBtnR = 318; int secretBtnT = 2; int secretBtnB = 38;
         if (t_x >= secretBtnL && t_x <= secretBtnR && t_y >= secretBtnT && t_y <= secretBtnB) {
             currentSecretContainsManual = true;
-        } else { currentSecretContainsManual = false; }
-        // --- END MANUAL BOUNDS CHECK ---
-
+        }
     } else { // Not pressed (Touch Released)
         if (touchIsBeingHeld) {
              touchIsBeingHeld = false;
-             // --- SIMPLIFIED RELEASE CHECK ---
              if (wasLeftPressedState && !currentLeftContainsManual) { buttonLeftTriggered = true; }
              if (wasRightPressedState && !currentRightContainsManual) { buttonRightTriggered = true; }
              if (wasSecretPressedState && !currentSecretContainsManual) { buttonSecretTriggered = true; }
-             // --- END SIMPLIFIED RELEASE CHECK ---
         }
     }
-    // Update previous state for next loop iteration
     wasLeftPressedState = currentLeftContainsManual;
     wasRightPressedState = currentRightContainsManual;
     wasSecretPressedState = currentSecretContainsManual;
@@ -322,112 +312,339 @@ void readButtons() {
 
 
 // ========================================
-// Setup Function (WITH ROTATION 3)
+// Setup Function
 // ========================================
 void setup() {
   Serial.begin(115200); while (!Serial && millis() < 2000);
-  Serial.println("\n\n--- Yada HW (TFT+Touch v2 - FINAL CLEANED) ---"); // Modified Title
+  Serial.println("\n\n--- Yada HW (TFT+Touch v5 - Final WIF) ---"); // Version bump
   Serial.print("Setup: Init Heap: "); Serial.println(heap_caps_get_free_size(MALLOC_CAP_DEFAULT));
 
   pinMode(TOUCH_IRQ, INPUT);
 
   tft.init();
-  // --- USING ROTATION 3 ---
-  tft.setRotation(3);
+  tft.setRotation(3); // USING ROTATION 3
   tft.fillScreen(TFT_BLACK);
   Serial.println("Setup: TFT OK (Rotation 3).");
 
   Serial.println("Setup: Init Touch SPI (VSPI)...");
   touchSPI.begin(TOUCH_SCK, TOUCH_MISO, TOUCH_MOSI, TOUCH_CS);
   ts.begin(touchSPI);
-  ts.setRotation(tft.getRotation()); // Match touch rotation (now 3)
+  ts.setRotation(tft.getRotation()); // Match touch rotation to TFT
   Serial.println("Setup: Touch OK (Rotation 3).");
 
   pinMode(TFT_BL, OUTPUT); digitalWrite(TFT_BL, TFT_BACKLIGHT_ON); Serial.println("Setup: BL OK.");
   tft.setTextColor(TFT_WHITE, TFT_BLACK); tft.setTextDatum(MC_DATUM); tft.drawString("Initializing...", tft.width() / 2, tft.height() / 2, 4);
   Serial.println("Setup: Init Msg OK."); delay(1000);
-  memset(password, '_', PIN_LENGTH); password[PIN_LENGTH] = '\0'; currentDigitIndex = 0; currentDigitValue = 0; passwordConfirmed = false; Serial.println("Setup: Pwd State OK.");
-  if (!prefs.begin(PREFS_NAMESPACE, false)) { Serial.println("W: Prefs RW Fail. RO..."); if (!prefs.begin(PREFS_NAMESPACE, true)) { Serial.println("E: Prefs RO Fail!"); tft.fillScreen(TFT_RED); tft.setTextColor(TFT_WHITE); tft.drawString("Storage Error!", tft.width()/2, tft.height()/2, 2); while(1); } else { Serial.println("Setup: Prefs RO OK."); prefs.end(); } } else { Serial.println("Setup: Prefs RW OK."); prefs.end(); }
-  bool prv = false; if (prefs.begin(PREFS_NAMESPACE, true)) { prv = prefs.getBool(PROVISIONED_KEY, false); prefs.end(); Serial.print("Setup: Provisioned = "); Serial.println(prv); } else { Serial.println("W: Prefs RO Fail 2."); }
-  currentState = STATE_PASSWORD_ENTRY; Serial.println("Setup: Init state -> PWD."); Serial.print("Setup: Exit Heap: "); Serial.println(heap_caps_get_free_size(MALLOC_CAP_DEFAULT)); Serial.println("Setup OK.");
+
+  memset(password, '_', PIN_LENGTH); password[PIN_LENGTH] = '\0';
+  currentDigitIndex = 0; currentDigitValue = 0; passwordConfirmed = false;
+  Serial.println("Setup: Pwd State OK.");
+
+  if (!prefs.begin(PREFS_NAMESPACE, false)) {
+    Serial.println("W: Prefs RW Fail. Trying RO...");
+    if (!prefs.begin(PREFS_NAMESPACE, true)) {
+      Serial.println("E: Prefs RO Fail!");
+      tft.fillScreen(TFT_RED); tft.setTextColor(TFT_WHITE);
+      tft.drawString("Storage Error!", tft.width()/2, tft.height()/2, 2);
+      while(1);
+    } else {
+      Serial.println("Setup: Prefs RO OK (initial RO fail).");
+      prefs.end(); // End RO mode if it was only for checking
+    }
+  } else {
+    Serial.println("Setup: Prefs RW OK.");
+    prefs.end(); // End RW mode after check
+  }
+
+  bool prv = false;
+  if (prefs.begin(PREFS_NAMESPACE, true)) { // Re-open as RO for reading provisioned status
+    prv = prefs.getBool(PROVISIONED_KEY, false);
+    prefs.end();
+    Serial.print("Setup: Provisioned = "); Serial.println(prv);
+  } else {
+    Serial.println("W: Prefs RO Fail for provisioned check.");
+  }
+
+  currentState = STATE_PASSWORD_ENTRY;
+  Serial.println("Setup: Init state -> PWD.");
+  Serial.print("Setup: Exit Heap: "); Serial.println(heap_caps_get_free_size(MALLOC_CAP_DEFAULT));
+  Serial.println("Setup OK.");
 }
 
 
 // ========================================
-// Main Loop (Cleaned up + Secret Button + Combined QR + Reordered Wallet View)
+// Main Loop
 // ========================================
 void loop() {
-  static bool firstLoop = true; static AppState lastState = STATE_INITIALIZING; bool redrawScreen = false;
-  if (currentState != lastState) { redrawScreen = true; lastState = currentState; buttonLeftTriggered = false; buttonRightTriggered = false; buttonSecretTriggered = false; touchIsBeingHeld = false; }
-  if (firstLoop) { redrawScreen = true; firstLoop = false; }
+  static bool firstLoop = true;
+  static AppState lastState = STATE_INITIALIZING; // Needs AppState enum to be defined globally
+  bool redrawScreen = false;
 
-  readButtons(); // Uses final mapping and MANUAL bound checks
+  if (currentState != lastState) { // currentState and lastState need to be global or static local
+    redrawScreen = true;
+    lastState = currentState;
+    buttonLeftTriggered = false; // These need to be global
+    buttonRightTriggered = false;
+    buttonSecretTriggered = false;
+    touchIsBeingHeld = false;
+  }
+  if (firstLoop) {
+    redrawScreen = true;
+    firstLoop = false;
+  }
 
-  switch (currentState) {
-    case STATE_INITIALIZING: Serial.println("W: Init Loop."); errorMessage="Init Loop Error"; displayErrorScreen(errorMessage); break;
-    case STATE_SHOW_GENERATED_MNEMONIC: if(redrawScreen) displayGeneratedMnemonicScreen(generatedMnemonic); if(buttonRightTriggered){ Serial.println("L: Mnem Confirm."); bool sM=false,sF=false; if(prefs.begin(PREFS_NAMESPACE,false)){if(prefs.putString(MNEMONIC_KEY,generatedMnemonic.c_str())){sM=true;}if(sM&&prefs.putBool(PROVISIONED_KEY,true)){sF=true;}prefs.end();}else{errorMessage="Store Write Err!";displayErrorScreen(errorMessage);break;} if(sM&&sF){loadedMnemonic=generatedMnemonic;generatedMnemonic="";currentState=STATE_WALLET_VIEW;currentRotationIndex=0; Serial.println("L: Saved OK -> Wallet");}else{errorMessage="Key Save Fail!";displayErrorScreen(errorMessage);}} break;
+  readButtons(); // Needs to be defined globally or prototyped
+
+  switch (currentState) { // currentState needs to be global
+    case STATE_INITIALIZING: // Enum members need to be globally defined
+      Serial.println("W: Init Loop reached. Should not happen.");
+      errorMessage="Init Loop Error"; // errorMessage needs to be global
+      displayErrorScreen(errorMessage); // Needs to be defined globally or prototyped
+      break;
+
+    case STATE_SHOW_GENERATED_MNEMONIC:
+      if(redrawScreen) displayGeneratedMnemonicScreen(generatedMnemonic); // Needs global generatedMnemonic and function
+      if(buttonRightTriggered){ // Needs global buttonRightTriggered
+        Serial.println("L: Mnem Confirm.");
+        bool sM=false,sF=false;
+        if(prefs.begin(PREFS_NAMESPACE,false)){ // Needs global prefs and PREFS_NAMESPACE
+          if(prefs.putString(MNEMONIC_KEY,generatedMnemonic.c_str())){sM=true;} // Needs global MNEMONIC_KEY
+          if(sM && prefs.putBool(PROVISIONED_KEY,true)){sF=true;} // Needs global PROVISIONED_KEY
+          prefs.end();
+        } else {
+          errorMessage="Store Write Err!"; displayErrorScreen(errorMessage); break;
+        }
+        if(sM && sF){
+          loadedMnemonic=generatedMnemonic; // Needs global loadedMnemonic
+          generatedMnemonic="";
+          currentState=STATE_WALLET_VIEW; // Needs global STATE_WALLET_VIEW
+          currentRotationIndex=0; // Needs global currentRotationIndex
+          Serial.println("L: Saved OK -> Wallet View");
+        } else {
+          errorMessage="Key Save Fail!"; displayErrorScreen(errorMessage);
+        }
+      }
+      break;
+
     case STATE_PASSWORD_ENTRY:
-        if (redrawScreen) { showPasswordEntryScreen(); }
-        if (buttonLeftTriggered) { // Triggered by touch in Bottom-Left Area
-            currentDigitValue = (currentDigitValue + 1) % 10;
-            showPasswordEntryScreen();
-            // Serial.printf("L: Cycle -> %d\n",currentDigitValue); // Optional Log
-        } else if (buttonRightTriggered) { // Triggered by touch in Top-Left Area
-            password[currentDigitIndex] = currentDigitValue + '0'; //Serial.printf("L: PIN[%d] set.\n", currentDigitIndex); // Optional Log
-            currentDigitIndex++;
-            if (currentDigitIndex >= PIN_LENGTH) { // Full PIN logic
-                password[PIN_LENGTH] = '\0'; Serial.println("L: Full PIN Entered."); passwordConfirmed = true; Serial.println("L: Check Store...");
-                bool ldOK=false, isPrv=false; if(prefs.begin(PREFS_NAMESPACE, true)){ isPrv=prefs.getBool(PROVISIONED_KEY,false); if(isPrv && prefs.isKey(MNEMONIC_KEY)){loadedMnemonic=prefs.getString(MNEMONIC_KEY,""); if(loadedMnemonic.length()>10) ldOK=true;} prefs.end(); } Serial.printf("L: Loaded Mnemonic OK = %d\n", ldOK); if(ldOK){ currentState=STATE_WALLET_VIEW; currentRotationIndex=0; Serial.println("L: -> Wallet View");} else { Serial.println("L: Gen Keys..."); uint8_t ent[16]; esp_fill_random(ent,16); generatedMnemonic=generateMnemonicFromEntropy(ent,16); if(generatedMnemonic.length()>0){ currentState=STATE_SHOW_GENERATED_MNEMONIC; Serial.println("L: -> Show Generated Mnem"); } else { errorMessage="Key Gen Fail!"; displayErrorScreen(errorMessage); passwordConfirmed=false; currentDigitIndex=0; currentDigitValue=0; memset(password,'_',PIN_LENGTH); password[PIN_LENGTH]='\0';}}
-            } else { // Next digit logic
-                currentDigitValue = 0;
-                showPasswordEntryScreen();
-                // Serial.println("L: Advanced to next digit."); // Optional Log
-            }
-        } break; // End PWD Entry
+        if (redrawScreen) { showPasswordEntryScreen(); } // Needs global function
 
-    // Wallet View case with Reordered Logic + Combined QR
+        if (buttonLeftTriggered) { // Needs global buttonLeftTriggered
+            currentDigitValue = (currentDigitValue + 1) % 10; // Needs global currentDigitValue
+            showPasswordEntryScreen();
+        }
+        else if (buttonRightTriggered) { // Needs global buttonRightTriggered
+            password[currentDigitIndex] = currentDigitValue + '0'; // Needs global password, currentDigitIndex
+            currentDigitIndex++;
+            currentDigitValue = 0;
+
+            if (currentDigitIndex >= PIN_LENGTH) { // Needs global PIN_LENGTH
+                password[PIN_LENGTH] = '\0';
+                Serial.print("L: Full PIN Entered: "); Serial.println(password);
+                passwordConfirmed = true; // Needs global passwordConfirmed
+                Serial.println("L: Checking provision status...");
+
+                bool ldOK=false, isPrv=false;
+                if(prefs.begin(PREFS_NAMESPACE, true)){
+                    isPrv=prefs.getBool(PROVISIONED_KEY,false);
+                    if(isPrv && prefs.isKey(MNEMONIC_KEY)){
+                        loadedMnemonic = prefs.getString(MNEMONIC_KEY,"");
+                        if(loadedMnemonic.length()>10) ldOK=true;
+                    }
+                    prefs.end();
+                }
+                Serial.printf("L: Loaded Mnemonic OK = %d, Provisioned = %d\n", ldOK, isPrv);
+
+                if(ldOK){
+                    currentState=STATE_WALLET_VIEW;
+                    currentRotationIndex=0;
+                    Serial.println("L: -> Wallet View");
+                } else {
+                    Serial.println("L: Not provisioned or mnem load failed. Generating new keys...");
+                    uint8_t ent[16];
+                    esp_fill_random(ent,16); // ESP-IDF specific, ensure it's available
+                    generatedMnemonic = generateMnemonicFromEntropy(ent,16); // Needs global function
+                    if(generatedMnemonic.length()>0){
+                        currentState=STATE_SHOW_GENERATED_MNEMONIC;
+                        Serial.println("L: -> Show Generated Mnemonic");
+                    } else {
+                        errorMessage="Key Gen Fail!"; displayErrorScreen(errorMessage);
+                        passwordConfirmed=false; currentDigitIndex=0; currentDigitValue=0;
+                        memset(password,'_',PIN_LENGTH); password[PIN_LENGTH]='\0';
+                    }
+                }
+            } else {
+                showPasswordEntryScreen();
+            }
+        }
+        break;
+
     case STATE_WALLET_VIEW: {
         bool walletNeedsRedraw = redrawScreen;
 
-        // --- Handle Button Actions FIRST ---
-        if(buttonSecretTriggered) { // Triggered by touch in Top-Right Area
-             Serial.println("L: Wallet: Secret Button -> Show Secret");
+        if(buttonSecretTriggered) {
+             Serial.println("L: Wallet: Secret Button -> Show Secret Mnemonic");
              currentState = STATE_SHOW_SECRET_MNEMONIC;
-             goto end_wallet_view_logic; // Skip wallet redraw this cycle
+             goto end_wallet_view_logic;
         }
-        else if(buttonLeftTriggered) { // Triggered by touch in Bottom-Left Area -> Prev Rotation
-             // Serial.println("L: Wallet: Left Trigger -> Prev Rot"); // Optional Log
-             currentRotationIndex=(currentRotationIndex==0)?MAX_ROTATION_INDEX:currentRotationIndex-1; // Decrement rotation
-             Serial.printf("L: Rotation -> %d\n", currentRotationIndex);
-             walletNeedsRedraw = true; // Request redraw
+        else if(buttonLeftTriggered) {
+             currentRotationIndex=(currentRotationIndex==0)?MAX_ROTATION_INDEX:currentRotationIndex-1; // Needs global MAX_ROTATION_INDEX
+             Serial.printf("L: Wallet: Rotation -> %d\n", currentRotationIndex);
+             walletNeedsRedraw = true;
         }
-        else if(buttonRightTriggered) { // Triggered by touch in Top-Left Area -> Next Rotation
-             // Serial.println("L: Wallet: Right Trigger -> Next Rot"); // Optional Log
-             currentRotationIndex=(currentRotationIndex+1)%(MAX_ROTATION_INDEX+1); // Increment rotation
-             Serial.printf("L: Rotation -> %d\n", currentRotationIndex);
-             walletNeedsRedraw = true; // Request redraw
+        else if(buttonRightTriggered) {
+             currentRotationIndex=(currentRotationIndex+1)%(MAX_ROTATION_INDEX+1);
+             Serial.printf("L: Wallet: Rotation -> %d\n", currentRotationIndex);
+             walletNeedsRedraw = true;
         }
-        // --- END Button Actions ---
 
-
-        // --- Perform Redraw ONLY if needed ---
         if (walletNeedsRedraw) {
-             Serial.printf("L: Redrawing Wallet R%d\n", currentRotationIndex);
-             if(loadedMnemonic.length()==0){errorMessage="Mnem Miss!"; displayErrorScreen(errorMessage); break;} if(!passwordConfirmed){errorMessage="PIN Confirmed?"; displayErrorScreen(errorMessage); break;} password[PIN_LENGTH]='\0';
-             HDPrivateKey hdMasterKey(loadedMnemonic, "", &Mainnet); if (!hdMasterKey.isValid()) { errorMessage = "MK Fail"; displayErrorScreen(errorMessage); break; } String pP="m"; for(int l=0;l<4;l++)pP+="/"+String(deriveIndexCpp(password,l))+"'"; HDPrivateKey pN=hdMasterKey.derive(pP.c_str()); if (!pN.isValid()) { errorMessage = "PN Fail"; displayErrorScreen(errorMessage); break; } String pC="0/"+String(currentRotationIndex),pP1="0/"+String(currentRotationIndex+1),pP2="0/"+String(currentRotationIndex+2); String ad="",h1="",h2=""; bool ok=true; String er=""; {HDPrivateKey kC=pN.derive(pC.c_str()),kP=pN.derive(pP1.c_str()),kT=pN.derive(pP2.c_str()); if(!kC.isValid()||!kP.isValid()||!kT.isValid()){er="Rel Key Fail R"+String(currentRotationIndex);ok=false;} if(ok){PublicKey pk=kC.publicKey(); if(!pk.isValid()){er="Inv PkC";ok=false;}else{ad=pk.address(&Mainnet);if(ad.length()==0){er="Addr Gen Fail";ok=false;}}} if(ok){PublicKey pk=kP.publicKey(); if(!pk.isValid()){er="Inv PkP";ok=false;}else{h1=hashPublicKey(pk);if(h1.startsWith("H")||h1.length()!=64){er="Hash PkP Fail";ok=false;}}} if(ok){PublicKey pk=kT.publicKey(); if(!pk.isValid()){er="Inv PkT";ok=false;}else{String pkh=pk.toString(); if(pkh.length()>0&&pkh.length()%2==0){size_t l=pkh.length()/2; uint8_t*b=(uint8_t*)malloc(l); if(!b){er="Mem HH";ok=false;}else{bool c=true; for(size_t i=0;i<l;i++){unsigned int v; if((i*2+1)>=pkh.length()||sscanf(pkh.substring(i*2,i*2+2).c_str(),"%x",&v)!=1){er="Hex HH";c=false;break;}b[i]=(uint8_t)v;} if(c){uint8_t hh1[32],hh2[32]; if(sha256Raw(b,l,hh1)&&sha256Raw(hh1,32,hh2)){h2=bytesToHex(hh2,32);if(h2.length()!=64){er="Len HH";ok=false;}}else{er="Hash HH Fail";ok=false;}}else{ok=false;}free(b);}}else{er="PkT Hex Fail";ok=false;}}}}
-             if(ok){ String combinedQRData = ad + "|" + h1 + "|" + h2; int estimatedQrVersion = 8; displaySingleRotationQR(currentRotationIndex, combinedQRData, "Yada Data", estimatedQrVersion); }
-             else { displayErrorScreen(er.length() > 0 ? er : "Calculation Error"); }
-        } // End if(walletNeedsRedraw)
+             Serial.printf("L: Redrawing Wallet R%d (WIF format)\n", currentRotationIndex);
+             if(loadedMnemonic.length()==0){errorMessage="Mnem Missing!"; displayErrorScreen(errorMessage); break;}
+             if(!passwordConfirmed){errorMessage="PIN Not Confirmed"; displayErrorScreen(errorMessage); break;}
+             password[PIN_LENGTH]='\0';
 
-        end_wallet_view_logic:; // Label for goto
+             HDPrivateKey hdMasterKey(loadedMnemonic, "", &Mainnet); // Needs Mainnet to be global (from Networks.h)
+             if (!hdMasterKey.isValid()) { errorMessage = "MasterKey Invalid"; displayErrorScreen(errorMessage); break; }
 
-        break; // End STATE_WALLET_VIEW
-      } // End scope STATE_WALLET_VIEW
+             String pinDerivedPath="m";
+             for(int l=0;l<4;l++) pinDerivedPath+="/"+String(deriveIndexCpp(password,l))+"'"; // Needs global deriveIndexCpp
+             HDPrivateKey pN=hdMasterKey.derive(pinDerivedPath.c_str());
+             if (!pN.isValid()) { errorMessage = "PIN-Key Invalid"; displayErrorScreen(errorMessage); break; }
 
-    case STATE_SHOW_SECRET_MNEMONIC: if(redrawScreen) displaySecretMnemonicScreen(loadedMnemonic); if(buttonLeftTriggered){Serial.println("L: Exit Secret"); currentState=STATE_WALLET_VIEW; /*selectedQRIndex=0;*/} break;
-    case STATE_ERROR: if(buttonLeftTriggered){Serial.println("L: Err Ack"); currentState=STATE_PASSWORD_ENTRY; currentDigitIndex=0; currentDigitValue=0; passwordConfirmed=false; memset(password,'_',PIN_LENGTH); password[PIN_LENGTH]='\0';} break;
-    default: Serial.printf("E: Bad State %d\n", currentState); errorMessage="State Err"; displayErrorScreen(errorMessage); break;
-  } // End switch
+             String path_n  ="0/"+String(currentRotationIndex);
+             String path_n1 ="0/"+String(currentRotationIndex+1);
+             String path_n2 ="0/"+String(currentRotationIndex+2);
 
-   // delay(30); // Keep commented out
-} // End loop
+             String addr_n = "";
+             String wif_n = "";
+             String addr_n_plus_1 = "";
+             String h_h_pk_n_plus_2 = "";
+             bool derivation_ok = true;
+             String error_msg_detail = "";
+
+             HDPrivateKey hd_priv_n = pN.derive(path_n.c_str());
+             if (!hd_priv_n.isValid()) {
+                 error_msg_detail = "Key_n Fail R" + String(currentRotationIndex); derivation_ok = false;
+             } else {
+                 PublicKey pk_n = hd_priv_n.publicKey();
+                 if (!pk_n.isValid()) {
+                     error_msg_detail = "Pk_n Fail"; derivation_ok = false;
+                 } else {
+                     addr_n = pk_n.address(&Mainnet);
+                     if (addr_n.length() == 0) {
+                         error_msg_detail = "Addr_n Gen Fail"; derivation_ok = false;
+                     }
+                 }
+
+                 if (derivation_ok) {
+                     // HDPrivateKey inherits from PrivateKey, so hd_priv_n can call wif() directly.
+                     wif_n = hd_priv_n.wif(); // THIS IS THE LATEST CORRECTION POINT
+                     if (wif_n.length() == 0) {
+                         error_msg_detail = "WIF_n Gen Fail"; derivation_ok = false;
+                     }
+                 }
+             }
+
+             if (derivation_ok) {
+                 HDPrivateKey hd_priv_n1 = pN.derive(path_n1.c_str());
+                 if (!hd_priv_n1.isValid()) {
+                     error_msg_detail = "Key_n+1 Fail R" + String(currentRotationIndex + 1); derivation_ok = false;
+                 } else {
+                     PublicKey pk_n1 = hd_priv_n1.publicKey();
+                     if (!pk_n1.isValid()) {
+                         error_msg_detail = "Pk_n+1 Fail"; derivation_ok = false;
+                     } else {
+                         addr_n_plus_1 = pk_n1.address(&Mainnet);
+                         if (addr_n_plus_1.length() == 0) {
+                             error_msg_detail = "Addr_n+1 Gen Fail"; derivation_ok = false;
+                         }
+                     }
+                 }
+             }
+
+             if (derivation_ok) {
+                 HDPrivateKey hd_priv_n2 = pN.derive(path_n2.c_str());
+                 if (!hd_priv_n2.isValid()) {
+                     error_msg_detail = "Key_n+2 Fail R" + String(currentRotationIndex + 2); derivation_ok = false;
+                 } else {
+                     PublicKey pk_n2 = hd_priv_n2.publicKey();
+                     if (!pk_n2.isValid()) {
+                         error_msg_detail = "Pk_n+2 Fail"; derivation_ok = false;
+                     } else {
+                         String pk_n2_hex = pk_n2.toString();
+                         if (pk_n2_hex.length() > 0 && pk_n2_hex.length() % 2 == 0) {
+                             size_t len_bytes = pk_n2_hex.length() / 2;
+                             uint8_t* pk_bytes = (uint8_t*)malloc(len_bytes);
+                             if (!pk_bytes) {
+                                 error_msg_detail = "Mem H(H(Pk))"; derivation_ok = false;
+                             } else {
+                                 bool conv_ok = true;
+                                 for (size_t i = 0; i < len_bytes; i++) {
+                                     unsigned int val;
+                                     if ((i*2+2) > pk_n2_hex.length() || sscanf(pk_n2_hex.substring(i * 2, i * 2 + 2).c_str(), "%x", &val) != 1) {
+                                         error_msg_detail = "Hex H(H(Pk))"; conv_ok = false; break;
+                                     }
+                                     pk_bytes[i] = (uint8_t)val;
+                                 }
+                                 if (conv_ok) {
+                                     uint8_t hash1[32], hash2[32];
+                                     if (sha256Raw(pk_bytes, len_bytes, hash1) && sha256Raw(hash1, 32, hash2)) { // Needs global sha256Raw
+                                         h_h_pk_n_plus_2 = bytesToHex(hash2, 32); // Needs global bytesToHex
+                                         if (h_h_pk_n_plus_2.length() != 64) {
+                                             error_msg_detail = "Len H(H(Pk))"; derivation_ok = false;
+                                         }
+                                     } else {
+                                         error_msg_detail = "Hash H(H(Pk)) Fail"; derivation_ok = false;
+                                     }
+                                 } else { derivation_ok = false; }
+                                 free(pk_bytes);
+                             }
+                         } else {
+                             error_msg_detail = "Pk_n+2 Hex Invalid"; derivation_ok = false;
+                         }
+                     }
+                 }
+             }
+
+             if (derivation_ok) {
+                 String combinedQRData = addr_n + "|" + wif_n + "|" + addr_n_plus_1 + "|" + h_h_pk_n_plus_2;
+                 Serial.println("QR Data: " + combinedQRData);
+                 Serial.println("QR Data Length: " + String(combinedQRData.length()));
+                 int estimatedQrVersion = 11;
+                 displaySingleRotationQR(currentRotationIndex, combinedQRData, "Rotation", estimatedQrVersion); // Needs global function
+             } else {
+                 displayErrorScreen(error_msg_detail.length() > 0 ? error_msg_detail : "Derivation Error");
+             }
+        }
+        end_wallet_view_logic:;
+        break;
+      }
+
+    case STATE_SHOW_SECRET_MNEMONIC:
+      if(redrawScreen) displaySecretMnemonicScreen(loadedMnemonic); // Needs global function and variable
+      if(buttonLeftTriggered){
+        Serial.println("L: Exit Secret Mnemonic screen.");
+        currentState=STATE_WALLET_VIEW;
+      }
+      break;
+
+    case STATE_ERROR:
+      if(buttonLeftTriggered){
+        Serial.println("L: Error Acknowledged.");
+        currentState=STATE_PASSWORD_ENTRY;
+        currentDigitIndex=0; currentDigitValue=0; passwordConfirmed=false;
+        memset(password,'_',PIN_LENGTH); password[PIN_LENGTH]='\0';
+      }
+      break;
+
+    default:
+      Serial.printf("E: Unknown State %d\n", currentState);
+      errorMessage="Unknown State Error";
+      displayErrorScreen(errorMessage);
+      currentState=STATE_PASSWORD_ENTRY;
+      currentDigitIndex=0; currentDigitValue=0; passwordConfirmed=false;
+      memset(password,'_',PIN_LENGTH); password[PIN_LENGTH]='\0';
+      break;
+  }
+}

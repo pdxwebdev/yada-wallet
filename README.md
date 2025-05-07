@@ -1,56 +1,64 @@
-Yada Hardware Wallet (ESP32 + TFT Touch)
+# Yada ESP32 Hardware Wallet (Rotating Keys)
 
-Offline Bitcoin / YadaCoin wallet that lives entirely on an ESP32 with a 2.8” ILI9341 screen and XPT2046 touch panel.Boot once → pick a 6‑digit PIN → write down the 12‑word seed → scan rotating QR codes to sign transactions air‑gapped.
+A minimalist Bitcoin hardware wallet on an ESP32 with a TFT touchscreen, featuring a rotating key scheme for enhanced security with a companion hot wallet.
 
-Heads‑up — hobby project; no formal security audit.
+The device generates QR codes containing the current Bitcoin address, its WIF private key, the next address, and a hash commitment for sequence verification. This allows a hot wallet to manage funds for one address at a time without needing the root mnemonic or PIN.
 
-Why you might care
+## Core Features
 
-Touch UI (Prev / Next + hidden mnemonic button)
+*   BIP39 Mnemonic generation and secure storage (NVS).
+*   6-digit PIN protection for wallet access.
+*   Hierarchical Deterministic (HD) key derivation (BIP32).
+*   **Key Rotation QR Data:** `addr_n | WIF_n | addr_n+1 | H(H(pk_n+2))`
+*   TFT Touchscreen UI for PIN entry, mnemonic display, and key rotation.
+*   Designed for offline, air-gapped operation.
 
-BIP‑39 seed + HD derivation (seed → PIN‑salted path → per‑rotation child)
+## Hardware
 
-Each QR = address | hash(next PK) | hash²(next+1 PK) → forward‑secure
+*   ESP32 Development Board
+*   TFT LCD Display with XPT2046 Touchscreen (ILI9341 or similar, configured for TFT_eSPI)
+    *   Default pins defined in the `.ino` and TFT_eSPI's `User_Setup.h`.
 
-Seed stored once in ESP32 NVS; PIN is never written to flash
+## Software Dependencies (Arduino Libraries)
 
-Hardware quick‑list
+*   **TFT_eSPI** (by Bodmer) - Configure `User_Setup.h` for your display.
+*   **XPT2046_Touchscreen** (by Paul Stoffregen)
+*   **uBitcoin** (by Stepan Snigirev)
+*   **QRCodeGenerator** (by Tom Magnier or compatible)
+*   `bip39_wordlist.h` (required in sketch directory)
 
-Part
+## Setup (Arduino IDE)
 
-Tested board
+1.  Install ESP32 Core.
+2.  Install the libraries listed above via Arduino Library Manager.
+3.  **Crucially, configure `User_Setup.h` in your TFT_eSPI library folder** to match your specific display and ESP32 pin connections.
+4.  Place `bip39_wordlist.h` (containing the BIP39 English wordlist array) in your sketch directory.
+5.  Select your ESP32 board, COM port, and upload.
 
-ESP32‑2432S028R (ILI9341 + XPT2046)
+## Usage Flow
 
-✅
+1.  **First Boot:** Set PIN, new mnemonic generated. **Backup this mnemonic securely!** Confirm backup.
+2.  **Subsequent Boots:** Enter PIN using "Cycle" (bottom-left) and "Next/OK" (top-left) touch buttons.
+3.  **Wallet View:**
+    *   Displays QR for current rotation `n`.
+    *   "< Prev" / "Next >" (bottom-left / top-left touch) to navigate rotations.
+    *   "..." (top-right touch) to view root mnemonic.
 
-Any ESP32 DevKit + matching TFT/touch
+## Security Note
 
-Install & Flash (Arduino IDE)
+The security of your funds relies on keeping your root mnemonic secret and the device physically secure. This software is experimental. **Use at your own risk.**
 
-Boards Manager → ESP32 by Espressif
+## How the QR Rotation Works
 
-Select ESP32 Dev Module
+Each QR provides the hot wallet with:
+1.  `addr_n`: Current address to receive funds.
+2.  `WIF_n`: Private key to spend from `addr_n`.
+3.  `addr_n+1`: Next address to anticipate.
+4.  `H(H(pk_n+2))`: Hash of the public key for `n+2`, for verifying sequence integrity with the next QR scan.
 
-Clone repo → open YADA.ino
+This allows the hot wallet to operate with only one private key at a time.
 
-Add libraries (Library Manager):
+## Contributing
 
-uBitcoin, TFT_eSPI, XPT2046_Touchscreen, QRCodeGenerator
+Contributions, bug reports, and feature requests are welcome via Issues or Pull Requests.
 
-Copy bip39_wordlist.h next to the sketch
-
-Compile & Upload @ 921 600 baud
-
-
-First‑boot cheat‑sheet
-
-Cycle (left) to choose each PIN digit, Next/OK (right) to confirm.
-
-Wallet generates seed → write it down → tap Backed Up.
-
-Main screen shows rotation 0 QR.
-
-< Prev / Next > flip rotations
-
-… tiny button (top‑right) reveals seed.

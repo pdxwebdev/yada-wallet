@@ -4,6 +4,7 @@
 #include <Preferences.h>      // Built-in ESP32 library
 #include <QRCodeGenerator.h>  // https://github.com/Tomstark/QRCodeGenerator
 #include "bip39_wordlist.h"   // Needs to be included (Make sure this file exists in your project)
+#include <BigNumber.h> // https://github.com/nickgammon/BigNumber download and load the zip file as a library
 
 #include <mbedtls/sha256.h>
 #include <esp_system.h>
@@ -78,6 +79,7 @@ String baseWalletPath;    // Stores m/0'/index0'/index1'/index2'/index3' (PR Cha
 
 
 // --- Password Entry State ---
+const uint32_t MODULO_2_31 = 2147483647; // 2^31
 const int PIN_LENGTH = 6;
 char password[PIN_LENGTH + 1];
 int currentDigitIndex = 0;
@@ -96,43 +98,104 @@ String hashPublicKey(const PublicKey& pk) { String h=pk.toString(); if(h.length(
 bool sha256Raw(const uint8_t* d, size_t l, uint8_t o[32]){mbedtls_sha256_context c;mbedtls_sha256_init(&c);if(mbedtls_sha256_starts(&c,0)!=0){mbedtls_sha256_free(&c);return false;}if(mbedtls_sha256_update(&c,d,l)!=0){mbedtls_sha256_free(&c);return false;}if(mbedtls_sha256_finish(&c,o)!=0){mbedtls_sha256_free(&c);return false;}mbedtls_sha256_free(&c);return true;}
 String bytesToHex(const uint8_t* b, size_t l){String s="";s.reserve(l*2);for(size_t i=0;i<l;i++){if(b[i]<0x10)s+="0";s+=String(b[i],HEX);}return s;}
 
-// PR Change: Updated deriveIndexCpp function
-uint32_t deriveIndexCpp(const char* factor, int level) {
-    char input[16]; // Max length of factor (PIN_LENGTH) + int (e.g., "1234560") + null terminator
-    snprintf(input, sizeof(input), "%s%d", factor, level);
+// Function to convert a single hex character to its decimal value
+int hexCharToDec(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'A' && c <= 'F') return 10 + c - 'A';
+    if (c >= 'a' && c <= 'f') return 10 + c - 'a';
+    return -1; // Invalid character
+}
 
-    Serial.printf("Input for level %d: '%s' (bytes: ", level, input);
-    for (size_t i = 0; i < strlen(input); i++) {
-        Serial.print((uint8_t)input[i], HEX);
-        Serial.print(" ");
+// Function to convert a hexadecimal string to a BigNumber
+BigNumber hexToBigNumber(const char* hex) {
+    BigNumber result = 0;
+    for (const char* p = hex; *p != '\0'; ++p) {
+        int digit = hexCharToDec(*p);
+        if (digit < 0) {
+            // Handle invalid character (optional, assume valid for SHA256)
+            continue;
+        }
+        result *= 16;
+        result += digit;
     }
-    Serial.println(")");
+    return result;
+}
 
-    uint8_t hash[32];
-    if (!sha256Raw((const uint8_t*)input, strlen(input), hash)) {
-        Serial.println("E: SHA256 failed");
-        return 0; // Or handle error appropriately
+// Derive index using BigNumber to handle 256-bit arithmetic
+uint32_t deriveIndex(String factor, int level) {
+    // Initialize BigNumber library
+    BigNumber::begin();
+
+    // Construct input string (e.g., "0000000")
+    String combined = factor + String(level);
+    
+    // Compute SHA-256 hash
+    unsigned char hash[32];
+    mbedtls_sha256((const unsigned char*)combined.c_str(), combined.length(), hash, 0);
+
+    // Convert hash to hex string
+    char hex[65]; // 64 characters + null terminator
+    for (int i = 0; i < 32; i++) {
+        sprintf(&hex[i * 2], "%02x", hash[i]);
     }
 
-    char hashHex[65]; // 32 bytes * 2 hex chars + null terminator
-    for (size_t i = 0; i < 32; i++) {
-        snprintf(hashHex + 2 * i, 3, "%02x", hash[i]);
-    }
-    Serial.printf("Hash for level %d: %s\n", level, hashHex);
+    Serial.print("SHA256 hash: ");
+    Serial.println(hex);
 
-    const uint32_t MOD = 2147483647; // 2^31 - 1 (Max non-hardened index)
-    uint64_t value = 0;
-    for (size_t i = 0; i < 32; i++) { // Iterate through all 32 bytes of the hash
-        uint8_t byte = hash[i];
-        // Incorporate byte into value: treat hash as a large base-256 number and take modulo
-        value = (value * 16) + (byte >> 4);    // High nibble
-        value %= MOD;
-        value = (value * 16) + (byte & 0x0F); // Low nibble
-        value %= MOD;
-    }
+    // Convert hex to BigNumber
+    BigNumber bigNumber = hexToBigNumber(hex);
+    // Debug: Print the index
+    Serial.print("bigNumber: ");
+    Serial.println(bigNumber);
+    
+    // Compute modulo 2^31 - 1
+    BigNumber modulo(MODULO_2_31);
+    BigNumber remainder = bigNumber % modulo;
 
-    Serial.printf("Index for level %d: %u\n", level, (uint32_t)value);
-    return (uint32_t)value; // The value is already < 2^31 due to modulo
+    // Debug: Print the index
+    Serial.print("deriveIndex index: ");
+    Serial.println(remainder);
+    
+    // Clean up BigNumber library
+    BigNumber::finish();
+    
+    return remainder;
+}
+
+// Derive hardened key using uBitcoin
+HDPrivateKey deriveHardened(HDPrivateKey root, uint32_t index) {
+    // Construct hardened path (e.g., "0'")
+    String path = String(index) + "'";
+    
+    // Derive hardened key
+    HDPrivateKey key = root.derive(path.c_str());
+    
+    // Validate key
+    bool isValid = key.isValid();
+    if (!isValid) {
+        String errorMessage = "hdWallet Key Invalid (" + path + ")";
+        Serial.println(errorMessage); // Replace with displayErrorScreen
+        passwordConfirmed = false;
+        currentDigitIndex = 0;
+        currentDigitValue = 0;
+        memset(password, '_', PIN_LENGTH);
+        password[PIN_LENGTH] = '\0';
+    }
+    
+    Serial.print("L: root derived: ");
+    Serial.println(path);
+    
+    return key;
+}
+
+// Derive secure path (returns HDPrivateKey)
+HDPrivateKey deriveSecurePath(HDPrivateKey root, String secondFactor) {
+    HDPrivateKey currentNode = root;
+    for (int level = 0; level < 4; level++) {
+        uint32_t index = deriveIndex(secondFactor, level);
+        currentNode = deriveHardened(currentNode, index);
+    }
+    return currentNode;
 }
 
 String generateMnemonicFromEntropy(const uint8_t* e, size_t len){if(len!=16)return""; uint8_t cs_len=(len*8)/32; uint8_t h[32]; mbedtls_sha256_context c; mbedtls_sha256_init(&c); mbedtls_sha256_starts(&c,0); mbedtls_sha256_update(&c,e,len); mbedtls_sha256_finish(&c,h); mbedtls_sha256_free(&c); uint8_t cs_byte=h[0]; uint8_t mask=0xFF<<(8-cs_len); uint8_t cs_bits=cs_byte&mask; int total_bits=(len*8)+cs_len; int num_words=total_bits/11; String m=""; m.reserve(120); uint16_t w_idx=0; int bit_count=0; for(int i=0;i<total_bits;i++){int byte_idx=i/8; int bit_in_byte=7-(i%8); uint8_t curr_byte; if(byte_idx<len){curr_byte=e[byte_idx];}else{int cs_bit_idx=i-(len*8); int shift=7-cs_bit_idx; curr_byte=cs_bits; bit_in_byte=shift;} uint8_t bit_val=(curr_byte>>bit_in_byte)&1; w_idx=(w_idx<<1)|bit_val; bit_count++; if(bit_count==11){if(w_idx>=2048)return""; m+=String(wordlist[w_idx]); if((i+1)<total_bits)m+=" "; w_idx=0; bit_count=0;}} return m;}
@@ -538,7 +601,7 @@ void loop() {
                     }
 
                     // Derive the first level key (m/0')
-                    HDPrivateKey tempKey = hdMasterKey.derive("0'"); // Path for the very first hardened child
+                    HDPrivateKey tempKey = hdMasterKey.derive("0'");
                     if (!tempKey.isValid()) {
                         errorMessage = "Initial Key 0' Invalid";
                         displayErrorScreen(errorMessage);
@@ -547,23 +610,22 @@ void loop() {
                         break;
                     }
 
-                    baseWalletPath = "0'"; // Initialize base path
-                    // Derive subsequent 4 levels based on PIN
-                    for (int l = 0; l < 4; l++) {
-                        uint32_t index = deriveIndexCpp(password, l);
-                        baseWalletPath += "/" + String(index) + "'";
-                    }
-                    // Now derive the full hdWalletKey using the constructed baseWalletPath from hdMasterKey
-                    // (Note: uBitcoin derives from parent, so hdMasterKey.derive(m/a/b) is fine)
-                    hdWalletKey = hdMasterKey.derive(baseWalletPath.c_str());
+                    // Derive the secure path using the password as secondFactor
+                    hdWalletKey = deriveSecurePath(tempKey, String(password));
                     if (!hdWalletKey.isValid()) {
-                        errorMessage = "hdWallet Key Invalid (" + baseWalletPath + ")";
+                        errorMessage = "Derived Wallet Key Invalid";
                         displayErrorScreen(errorMessage);
                         passwordConfirmed = false; currentDigitIndex = 0; currentDigitValue = 0;
                         memset(password, '_', PIN_LENGTH); password[PIN_LENGTH] = '\0';
                         break;
                     }
-                    Serial.println("L: hdWalletKey derived: " + baseWalletPath);
+
+                    // Construct the baseWalletPath as a string (e.g., "0'/index0'/index1'/index2'/index3'")
+                    baseWalletPath = "";
+                    for (int level = 0; level < 4; level++) {
+                        uint32_t index = deriveIndex(String(password), level);
+                        baseWalletPath += "/" + String(index) + "'";
+                    }
 
                     currentState = STATE_WALLET_VIEW;
                     currentRotationIndex = 0;
@@ -576,10 +638,6 @@ void loop() {
                     if (generatedMnemonic.length() > 0) {
                         currentState = STATE_SHOW_GENERATED_MNEMONIC;
                         Serial.println("L: -> Show Generated Mnemonic");
-                        // PIN state remains, it will be needed if they confirm the new mnemonic
-                        // Or, we could clear it here and make them re-enter after mnemonic backup.
-                        // For now, keep PIN as is, it's used for deriveIndexCpp for the initial keys
-                        // if the flow were different. The current PR flow re-enters PIN for new mnem.
                     } else {
                         errorMessage = "Key Gen Fail!";
                         displayErrorScreen(errorMessage);
@@ -620,6 +678,7 @@ void loop() {
                 errorMessage = "hdWallet Key Invalid";
                 displayErrorScreen(errorMessage);
                 break;
+
              }
              // password[PIN_LENGTH]='\0'; // Already null-terminated
 
@@ -632,13 +691,14 @@ void loop() {
             }
             Serial.println(")");
 
+
             HDPrivateKey parentKey = hdWalletKey; // Start with m/0'/pin_lvl0'/.../pin_lvl3'
 
             // Apply currentRotationIndex rotations
             for (int r = 0; r < currentRotationIndex; r++) {
                 String rotationPathSegment = "";
                 for (int l = 0; l < 4; l++) {
-                    uint32_t index = deriveIndexCpp(password, l);
+                    uint32_t index = deriveIndex(password, l);
                     rotationPathSegment += (l > 0 ? "/" : "") + String(index) + "'";
                 }
                 parentKey = parentKey.derive(rotationPathSegment.c_str());
@@ -659,7 +719,7 @@ void loop() {
             // Pre-rotated key (for addr_n_plus_1)
             String preRotatedPathSegment = "";
             for (int l = 0; l < 4; l++) {
-                uint32_t index = deriveIndexCpp(password, l);
+                uint32_t index = deriveIndex(password, l);
                 preRotatedPathSegment += (l > 0 ? "/" : "") + String(index) + "'";
             }
             HDPrivateKey preRotatedKey = currentKey.derive(preRotatedPathSegment.c_str());
@@ -672,7 +732,7 @@ void loop() {
             // Twice-pre-rotated key (for addr_n_plus_2)
             String twicePreRotatedPathSegment = "";
             for (int l = 0; l < 4; l++) {
-                uint32_t index = deriveIndexCpp(password, l);
+                uint32_t index = deriveIndex(password, l);
                 twicePreRotatedPathSegment += (l > 0 ? "/" : "") + String(index) + "'";
             }
             HDPrivateKey twicePreRotatedKey = preRotatedKey.derive(twicePreRotatedPathSegment.c_str());

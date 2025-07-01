@@ -37,7 +37,7 @@ SPIClass touchSPI(VSPI);
 XPT2046_Touchscreen ts(TOUCH_CS, TOUCH_IRQ);
 
 // --- On-Screen Buttons ---
-#define MAX_BUTTONS 5
+#define MAX_BUTTONS 6
 TFT_eSPI_Button buttons[MAX_BUTTONS];
 #define BUTTON_H 50 // Increased Height
 #define BUTTON_W 100
@@ -45,15 +45,19 @@ TFT_eSPI_Button buttons[MAX_BUTTONS];
 #define BUTTON_SPACING_X 10
 #define BUTTON_SPACING_Y 10
 
-// Define button IDs (Based on HORIZONTAL layout + Secret)
+
+// Define button IDs (Based on HORIZONTAL layout + Secret + Jump)
 #define BTN_LEFT   0 // Cycle/Back/Prev/OK (Bottom Left drawn -> Touch X=65, Y=205)
-#define BTN_RIGHT  1 // Next/Confirm (Bottom Right drawn -> Touch X=35, Y=45) // Note: touch mapping for this is TOP-LEFT in main loop
+#define BTN_RIGHT  1 // Next/Confirm (Bottom Right drawn -> Touch X=35, Y=45)
 #define BTN_SECRET 2 // Show Secret Mnemonic (Top Right Drawn -> Touch X=300, Y=20)
+#define BTN_JUMP   3 // Jump to Rotation Index (Top Right, below Secret -> New Touch Coordinates)
 #define BTN_OK     0
 #define BTN_BACK   0
 #define BTN_CYCLE  0
 #define BTN_NEXT   1
 #define BTN_CONFIRM 1
+
+
 
 // --- Preferences ---
 Preferences prefs;
@@ -65,12 +69,20 @@ const char* PROVISIONED_KEY = "provisioned";
 bool buttonLeftTriggered = false;
 bool buttonRightTriggered = false;
 bool buttonSecretTriggered = false;
+bool buttonJumpTriggered = false; // New Jump button trigger
 unsigned long touchHoldStartTime = 0;
 bool touchIsBeingHeld = false;
 
 // --- State Variables ---
-enum AppState { STATE_INITIALIZING, STATE_SHOW_GENERATED_MNEMONIC, STATE_PASSWORD_ENTRY, STATE_WALLET_VIEW, STATE_SHOW_SECRET_MNEMONIC, STATE_ERROR };
+enum AppState { STATE_INITIALIZING, STATE_SHOW_GENERATED_MNEMONIC, STATE_PASSWORD_ENTRY, STATE_WALLET_VIEW, STATE_SHOW_SECRET_MNEMONIC, STATE_ERROR, STATE_JUMP_ENTRY };
 AppState currentState = STATE_INITIALIZING;
+
+// --- Jump Entry State ---
+const int JUMP_INDEX_LENGTH = 4; // For MAX_ROTATION_INDEX=1000
+char jumpIndex[JUMP_INDEX_LENGTH + 1]; // To store digits 0-9
+int currentJumpDigitIndex = 0;
+int currentJumpDigitValue = 0;
+
 String errorMessage = "";
 String generatedMnemonic = "";
 String loadedMnemonic = "";
@@ -271,6 +283,45 @@ void showPasswordEntryScreen() {
     drawButtons(2);
 }
 
+void showJumpEntryScreen() {
+    tft.fillScreen(TFT_DARKCYAN);
+    tft.setTextColor(TFT_WHITE, TFT_DARKCYAN);
+    tft.setTextDatum(MC_DATUM);
+    tft.setTextSize(2);
+    tft.drawString("Enter Rotation Index", tft.width()/2, 30);
+    int digitBoxSize = 25;
+    int spacing = 8;
+    int totalW = JUMP_INDEX_LENGTH * digitBoxSize + (JUMP_INDEX_LENGTH - 1) * spacing;
+    int startX = (tft.width() - totalW) / 2;
+    int digitY = 80;
+    tft.setTextSize(2);
+    tft.setTextDatum(MC_DATUM);
+    for (int i = 0; i < JUMP_INDEX_LENGTH; i++) {
+        int currentX = startX + i * (digitBoxSize + spacing);
+        uint16_t boxColor = (i == currentJumpDigitIndex) ? TFT_YELLOW : TFT_WHITE;
+        tft.drawRect(currentX, digitY, digitBoxSize, digitBoxSize, boxColor);
+        char displayChar;
+        if (i < currentJumpDigitIndex) { displayChar = '*'; }
+        else if (i == currentJumpDigitIndex) { displayChar = currentJumpDigitValue + '0'; }
+        else { displayChar = '_'; }
+        char tempStr[2] = {displayChar, '\0'};
+        tft.drawString(tempStr, currentX + digitBoxSize / 2, digitY + digitBoxSize / 2 + 2);
+    }
+    char nextLabel[5] = "Next";
+    if (currentJumpDigitIndex == JUMP_INDEX_LENGTH - 1) {
+        strcpy(nextLabel, "OK");
+    }
+
+    int leftButtonCenterX = 65;     // Bottom Left X (drawing coordinates)
+    int leftButtonCenterY = 205;    // Bottom Left Y (drawing coordinates)
+    int rightButtonCenterX = 255;   // Bottom Right X (drawing coordinates)
+    int rightButtonCenterY = 205;   // Bottom Right Y (drawing coordinates)
+
+    buttons[BTN_CYCLE].initButton(&tft, leftButtonCenterX, leftButtonCenterY, BUTTON_W, BUTTON_H, TFT_WHITE, TFT_BLUE, TFT_BLACK, "Cycle", 2);
+    buttons[BTN_NEXT].initButton(&tft, rightButtonCenterX, rightButtonCenterY, BUTTON_W, BUTTON_H, TFT_WHITE, TFT_GREEN, TFT_BLACK, nextLabel, 2);
+    drawButtons(2);
+}
+
 // --- Display Single QR Code (Combined Data + Maximized Size + FINAL Buttons + Secret Button) ---
 void displaySingleRotationQR(int rIdx, const String& combinedQRData, const String& label, int qrVersion) {
     if(combinedQRData.length() == 0){ displayErrorScreen("QR Gen Error (Empty)"); return; }
@@ -345,11 +396,14 @@ void displaySingleRotationQR(int rIdx, const String& combinedQRData, const Strin
     int rightButtonCenterY = 205;   // Bottom Right Y (drawing coordinates)
     int secretButtonCenterX = tft.width() - (SECRET_BUTTON_SIZE / 2) - 5; // Top Right X
     int secretButtonCenterY = (SECRET_BUTTON_SIZE / 2) + 5;               // Top Right Y
+    int jumpButtonCenterX = tft.width() - (SECRET_BUTTON_SIZE / 2) - 5;   // Top Right X, same as Secret
+    int jumpButtonCenterY = (SECRET_BUTTON_SIZE / 2) + 5 + SECRET_BUTTON_SIZE + 5; // Below Secret
 
     buttons[BTN_LEFT].initButton(&tft, leftButtonCenterX, leftButtonCenterY, BUTTON_W, BUTTON_H, TFT_WHITE, TFT_BLUE, TFT_BLACK, "< Prev", 2);
     buttons[BTN_RIGHT].initButton(&tft, rightButtonCenterX, rightButtonCenterY, BUTTON_W, BUTTON_H, TFT_WHITE, TFT_BLUE, TFT_BLACK, "Next >", 2);
-    buttons[BTN_SECRET].initButton(&tft, secretButtonCenterX, secretButtonCenterY, SECRET_BUTTON_SIZE, SECRET_BUTTON_SIZE, TFT_WHITE, TFT_ORANGE, TFT_BLACK, "...", 1);
-    drawButtons(3);
+    buttons[BTN_SECRET].initButton(&tft, secretButtonCenterX, secretButtonCenterY, SECRET_BUTTON_SIZE, SECRET_BUTTON_SIZE, TFT_WHITE, TFT_ORANGE, TFT_BLACK, "Seed", 1);
+    buttons[BTN_JUMP].initButton(&tft, jumpButtonCenterX, jumpButtonCenterY, SECRET_BUTTON_SIZE, SECRET_BUTTON_SIZE, TFT_WHITE, TFT_CYAN, TFT_BLACK, "Jump", 1);
+    drawButtons(4);
     free(qrDataBuffer);
  }
 
@@ -362,17 +416,20 @@ void readButtons() {
     static bool wasLeftPressedState = false;
     static bool wasRightPressedState = false;
     static bool wasSecretPressedState = false;
+    static bool wasJumpPressedState = false; // New Jump button state
     static unsigned long lastTouchTime = 0;
     const unsigned long debounceDelay = 200; // Debounce in ms
 
     buttonLeftTriggered = false;
     buttonRightTriggered = false;
     buttonSecretTriggered = false;
+    buttonJumpTriggered = false; // Initialize Jump trigger
 
     bool pressed = ts.tirqTouched() && ts.touched();
     bool currentLeftContainsManual = false;
     bool currentRightContainsManual = false;
     bool currentSecretContainsManual = false;
+    bool currentJumpContainsManual = false; // New Jump touch state
 
     if (pressed) {
         TS_Point p = ts.getPoint();
@@ -404,6 +461,13 @@ void readButtons() {
             currentSecretContainsManual = true;
             Serial.println("L: Touch in Secret Button");
         }
+
+        // Jump button bounds (below Secret button)
+        int jumpBtnL = 215, jumpBtnR = 270, jumpBtnT = 2, jumpBtnB = 38; // Adjusted to be below Secret
+        if (t_x >= jumpBtnL && t_x <= jumpBtnR && t_y >= jumpBtnT && t_y <= jumpBtnB) {
+            currentJumpContainsManual = true;
+            Serial.println("L: Touch in Jump Button");
+        }
     } else {
         if (touchIsBeingHeld && (millis() - lastTouchTime > debounceDelay)) {
             touchIsBeingHeld = false;
@@ -419,12 +483,17 @@ void readButtons() {
                 buttonSecretTriggered = true;
                 Serial.println("L: Secret Button Triggered");
             }
+            if (wasJumpPressedState && !currentJumpContainsManual) {
+                buttonJumpTriggered = true;
+                Serial.println("L: Jump Button Triggered");
+            }
             lastTouchTime = millis();
         }
     }
     wasLeftPressedState = currentLeftContainsManual;
     wasRightPressedState = currentRightContainsManual;
     wasSecretPressedState = currentSecretContainsManual;
+    wasJumpPressedState = currentJumpContainsManual;
 }
 
 
@@ -450,10 +519,13 @@ void setup() {
   Serial.println("Setup: Touch OK (Rotation 3).");
 
   pinMode(TFT_BL, OUTPUT); digitalWrite(TFT_BL, TFT_BACKLIGHT_ON); Serial.println("Setup: BL OK.");
-  tft.setTextColor(TFT_WHITE, TFT_BLACK); tft.setTextDatum(MC_DATUM); tft.drawString("Initializing...", tft.width() / 2, tft.height() / 2, 4);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK); tft.setTextDatum(MC_DATUM); tft.drawString("YadaCoin Starting...", tft.width() / 2, tft.height() / 2, 4);
   Serial.println("Setup: Init Msg OK."); delay(1000);
 
   memset(password, '_', PIN_LENGTH); password[PIN_LENGTH] = '\0';
+  memset(jumpIndex, '_', JUMP_INDEX_LENGTH); jumpIndex[JUMP_INDEX_LENGTH] = '\0'; // Initialize jumpIndex
+  currentDigitIndex = 0; currentDigitValue = 0; passwordConfirmed = false;
+  currentJumpDigitIndex = 0; currentJumpDigitValue = 0; // Initialize jump state
   currentDigitIndex = 0; currentDigitValue = 0; passwordConfirmed = false;
   Serial.println("Setup: Pwd State OK.");
 
@@ -486,6 +558,7 @@ void setup() {
   Serial.println("Setup: Init state -> PWD.");
   Serial.print("Setup: Exit Heap: "); Serial.println(heap_caps_get_free_size(MALLOC_CAP_DEFAULT));
   Serial.println("Setup OK.");
+
 }
 
 
@@ -726,6 +799,15 @@ void loop() {
             currentState = STATE_SHOW_SECRET_MNEMONIC;
             goto end_wallet_view_logic;
         }
+        else if (buttonJumpTriggered) {
+            Serial.println("L: Wallet: Jump Button -> Jump Entry");
+            currentState = STATE_JUMP_ENTRY;
+            currentJumpDigitIndex = 0;
+            currentJumpDigitValue = 0;
+            memset(jumpIndex, '_', JUMP_INDEX_LENGTH);
+            jumpIndex[JUMP_INDEX_LENGTH] = '\0';
+            goto end_wallet_view_logic;
+        }
         else if(buttonLeftTriggered) {
             currentRotationIndex = (currentRotationIndex == 0) ? MAX_ROTATION_INDEX : currentRotationIndex - 1;
             Serial.printf("L: Wallet: Prev Rotation -> %d\n", currentRotationIndex);
@@ -856,6 +938,61 @@ void loop() {
         currentState=STATE_WALLET_VIEW;
       }
       break;
+    
+    case STATE_JUMP_ENTRY:
+        if (redrawScreen) {
+            showJumpEntryScreen();
+            Serial.println("L: Jump Entry Screen Redrawn");
+        }
+
+        if (buttonLeftTriggered) {
+            currentJumpDigitValue = (currentJumpDigitValue + 1) % 10;
+            showJumpEntryScreen();
+            Serial.printf("L: Jump Digit cycled to %d at index %d\n", currentJumpDigitValue, currentJumpDigitIndex);
+        }
+        else if (buttonRightTriggered) {
+            Serial.printf("L: Jump Right Button (Next/OK) Pressed at digit index %d\n", currentJumpDigitIndex);
+            jumpIndex[currentJumpDigitIndex] = currentJumpDigitValue + '0';
+            currentJumpDigitIndex++;
+            currentJumpDigitValue = 0;
+
+            if (currentJumpDigitIndex >= JUMP_INDEX_LENGTH) {
+                jumpIndex[JUMP_INDEX_LENGTH] = '\0';
+                Serial.print("L: Full Jump Index Entered: ");
+                Serial.println(jumpIndex);
+
+                // Convert jumpIndex to integer
+                int newRotationIndex = 0;
+                for (int i = 0; i < JUMP_INDEX_LENGTH; i++) {
+                    if (jumpIndex[i] >= '0' && jumpIndex[i] <= '9') {
+                        newRotationIndex = newRotationIndex * 10 + (jumpIndex[i] - '0');
+                    } else {
+                        newRotationIndex = 0; // Invalid digit, reset
+                        break;
+                    }
+                }
+
+                // Validate rotation index
+                if (newRotationIndex >= 0 && newRotationIndex <= MAX_ROTATION_INDEX) {
+                    currentRotationIndex = newRotationIndex;
+                    Serial.printf("L: Jump to Rotation Index %d\n", currentRotationIndex);
+                    currentState = STATE_WALLET_VIEW;
+                } else {
+                    errorMessage = "Invalid Rotation Index";
+                    Serial.println("E: " + errorMessage);
+                    displayErrorScreen(errorMessage);
+                    currentState = STATE_ERROR;
+                    currentJumpDigitIndex = 0;
+                    currentJumpDigitValue = 0;
+                    memset(jumpIndex, '_', JUMP_INDEX_LENGTH);
+                    jumpIndex[JUMP_INDEX_LENGTH] = '\0';
+                }
+            } else {
+                showJumpEntryScreen();
+                Serial.printf("L: Jump Digit entered, index now %d\n", currentJumpDigitIndex);
+            }
+        }
+        break;
 
     case STATE_ERROR:
       if(buttonLeftTriggered){

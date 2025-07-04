@@ -64,6 +64,8 @@ Preferences prefs;
 const char* PREFS_NAMESPACE = "yada-wallet";
 const char* MNEMONIC_KEY = "mnemonic";
 const char* PROVISIONED_KEY = "provisioned";
+const char* ROTATION_INDEX_KEY = "rotation_idx"; // New key for rotation index
+const char* CHAINCODE_KEY = "chaincode";         // New key for chaincode
 
 // --- Button State ---
 bool buttonLeftTriggered = false;
@@ -548,10 +550,13 @@ void setup() {
   bool prv = false;
   if (prefs.begin(PREFS_NAMESPACE, true)) { // Re-open as RO for reading provisioned status
     prv = prefs.getBool(PROVISIONED_KEY, false);
+    currentRotationIndex = prefs.getInt(ROTATION_INDEX_KEY, 0); // Restore rotation index, default to 0
+    Serial.print("Setup: Restored Rotation Index = "); Serial.println(currentRotationIndex);
     prefs.end();
     Serial.print("Setup: Provisioned = "); Serial.println(prv);
   } else {
     Serial.println("W: Prefs RO Fail for provisioned check.");
+    currentRotationIndex = 0; // Fallback to 0 if storage fails
   }
 
   currentState = STATE_PASSWORD_ENTRY;
@@ -863,6 +868,31 @@ void loop() {
                 errorMessage = "Current Key Invalid";
                 displayErrorScreen(errorMessage);
                 goto end_wallet_view_logic;
+            }
+
+            // Save chaincode and rotation index
+            bool saveSuccess = false;
+            if (prefs.begin(PREFS_NAMESPACE, false)) {
+                // Save rotation index
+                if (prefs.putInt(ROTATION_INDEX_KEY, currentRotationIndex)) {
+                    Serial.printf("L: Saved Rotation Index %d\n", currentRotationIndex);
+                } else {
+                    Serial.println("W: Failed to save Rotation Index");
+                }
+
+                // Convert chaincode to hex string
+                uint8_t chaincode[32];
+                memcpy(chaincode, currentKey.chainCode, 32);
+                String chaincodeHex = bytesToHex(chaincode, 32);
+                if (prefs.putString(CHAINCODE_KEY, chaincodeHex.c_str())) {
+                    Serial.println("L: Saved Chaincode: " + chaincodeHex);
+                    saveSuccess = true;
+                } else {
+                    Serial.println("W: Failed to save Chaincode");
+                }
+                prefs.end();
+            } else {
+                Serial.println("W: Prefs RW Fail for saving chaincode/rotation");
             }
 
             HDPrivateKey preRotatedKey = currentKey.derive(rotationPathSegment.c_str());

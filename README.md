@@ -38,7 +38,7 @@ A air-gapped Yadacoin Hardware Wallet for ESP32, specifically demonstrated with 
     - In Arduino IDE: `Tools > Manage Libraries...`
     - Install:
 
-      - `uBitcoin` (by Stepan Snigirev) [https://github.com/pdxwebdev/uBitcoin] (this fork patches a compile error, use this fork.)
+      - `uBitcoin` (by Stepan Snigirev) [https://github.com/pdxwebdev/uBitcoin] (**USE THIS FORK**, it patches a compile error.)
       - `TFT_eSPI` (by Bodmer)
       - `XPT2046_Touchscreen` (by Paul Stoffregen)
       - `QRCodeGenerator` (by Felix Erdmann) - URL: [https://github.com/felixerdy/QRCodeGenerator]

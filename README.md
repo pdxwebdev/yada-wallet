@@ -38,10 +38,10 @@ A air-gapped Yadacoin Hardware Wallet for ESP32, specifically demonstrated with 
     - In Arduino IDE: `Tools > Manage Libraries...`
     - Install:
 
-      - `uBitcoin` (by Stepan Snigirev)
+      - `uBitcoin` (by Stepan Snigirev) [https://github.com/pdxwebdev/uBitcoin] (this fork patches a compile error, use this fork.)
       - `TFT_eSPI` (by Bodmer)
       - `XPT2046_Touchscreen` (by Paul Stoffregen)
-      - `QRCodeGenerator` (by Felix Erdmann - URL: [https://github.com/felixerdy/QRCodeGenerator]
+      - `QRCodeGenerator` (by Felix Erdmann) - URL: [https://github.com/felixerdy/QRCodeGenerator]
 
     - **Manual Install for `BigNumber`:**
       - Download ZIP: [https://github.com/nickgammon/BigNumber](https://github.com/nickgammon/BigNumber)
@@ -51,7 +51,7 @@ A air-gapped Yadacoin Hardware Wallet for ESP32, specifically demonstrated with 
 
     - In the Arduino IDE, next to your main `.ino` sketch tab, click the small downward arrow (or "Sketch" menu) and select "New Tab".
     - Name the file `bip39_wordlist.h`.
-    - Copy the content for this file from the `YADA/bip39_wordlist.h` file in the [project repository](https://github.com/mrfixit-stickyhash/yada-wallet/blob/main/YADA/bip39_wordlist.h).
+    - Copy the content for this file from the `YADA/bip39_wordlist.h` file in the [project repository](https://github.com/pdxwebdev/yada-wallet/blob/main/YADA/bip39_wordlist.h).
 
 4.  **Configure `TFT_eSPI` Library (for ESP32-2432S028R / CYD):**
 

@@ -1,0 +1,15 @@
+{
+  "name": "YadaCoin Hardware Wallet",
+  "version": "1.0.0",
+  "builds": [
+    {
+      "chipFamily": "ESP32",
+      "parts": [
+        {
+          "path": "YADA.ino.merged.bin",
+          "offset": 0
+        }
+      ]
+    }
+  ]
+}

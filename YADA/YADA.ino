@@ -72,7 +72,7 @@ struct BlockchainConfig {
 
 BlockchainConfig blockchains[] = {
   {"YadaCoin", 0, &Mainnet}, // YadaCoin uses Bitcoin-style Mainnet
-  {"BSC", 1, &BSCNetwork}   // BSC with custom network
+  {"BSC", 1, &Mainnet}   // BSC with custom network
 };
 
 const int NUM_BLOCKCHAINS = sizeof(blockchains) / sizeof(blockchains[0]);

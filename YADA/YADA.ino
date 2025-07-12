@@ -1179,7 +1179,6 @@ void loop() {
               }
               PublicKey prevPublicKey = prevParentKey.publicKey();
               prevPublicKey.compressed = false; // Set to uncompressed
-              String public_key_hash_prev;
               if (String(blockchains[selectedBlockchainIndex].name) == "BSC") {
                   unsigned char hash_n_minus_1[32];
                   keccak256Address(prevPublicKey, hash_n_minus_1);
@@ -1192,10 +1191,10 @@ void loop() {
                   displayErrorScreen(errorMessage);
                   goto end_wallet_view_logic;
               }
-                  Serial.printf("L: Previous Rotation %d Address: %s\n", currentRotationIndex - 1, public_key_hash_prev.c_str());
-              } else {
-                  Serial.println("L: Index 0, public_key_hash_prev set to blank");
-              }
+              Serial.printf("L: Previous Rotation %d Address: %s\n", currentRotationIndex - 1, public_key_hash_prev.c_str());
+          } else {
+              Serial.println("L: Index 0, public_key_hash_prev set to blank");
+          }
           String wif_n;
           String addr_n_plus_1;
           String addr_n_plus_2;

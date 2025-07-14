@@ -379,7 +379,14 @@ String generateMnemonicFromEntropy(const uint8_t* e, size_t len) {
 // Display Functions
 // ========================================
 void drawButtons(int numButtons) {
-  for (int i = 0; i < numButtons; i++) buttons[i].drawButton();
+  for (int i = 0; i < numButtons; i++) {
+    if (i == BTN_LEFT && currentState == STATE_WALLET_VIEW && currentRotationIndex == 0) {
+      Serial.println("L: Skipping BTN_LEFT (rotation 0 in STATE_WALLET_VIEW)");
+      continue;
+    }
+    Serial.printf("L: Drawing button %d in state %d\n", i, currentState);
+    buttons[i].drawButton();
+  }
 }
 
 void displayErrorScreen(String msg) {
@@ -460,10 +467,14 @@ void displayGeneratedMnemonicScreen(String m) {
       }
     } else cw += c;
   }
+  // Initialize only the "Backed Up" button for BTN_CONFIRM
   int confirmButtonCenterX = 255;
   int confirmButtonCenterY = 205;
   buttons[BTN_CONFIRM].initButton(&tft, confirmButtonCenterX, confirmButtonCenterY, BUTTON_W + 40, BUTTON_H, TFT_WHITE, TFT_GREEN, TFT_BLACK, "Backed Up", 2);
-  drawButtons(1);
+  // Explicitly clear the BTN_CYCLE button to ensure it is not drawn
+  buttons[BTN_CYCLE].initButton(&tft, 0, 0, 0, 0, TFT_BLACK, TFT_BLACK, TFT_BLACK, "", 0);
+  // Draw only the BTN_CONFIRM button
+  buttons[BTN_CONFIRM].drawButton();
 }
 
 void displaySecretMnemonicScreen(String m) {
@@ -791,11 +802,11 @@ void setup() {
   delay(1000);
   memset(password, '_', PIN_LENGTH);
   password[PIN_LENGTH] = '\0';
-  memset(jumpIndex, '_', JUMP_INDEX_LENGTH);
-  jumpIndex[JUMP_INDEX_LENGTH] = '\0';
   currentDigitIndex = 0;
   currentDigitValue = 0;
   passwordConfirmed = false;
+  currentState = STATE_BLOCKCHAIN_SELECTION;
+  Serial.println("Setup: Init state -> BLOCKCHAIN_SELECTION.");
   currentJumpDigitIndex = 0;
   currentJumpDigitValue = 0;
   Serial.println("Setup: Pwd State OK.");
@@ -881,16 +892,43 @@ void loop() {
           } else {
             Serial.println("W: Failed to save blockchain index");
           }
+          bool isPrv = prefs.getBool(PROVISIONED_KEY, false);
+          if (isPrv && prefs.isKey(MNEMONIC_KEY)) {
+            loadedMnemonic = prefs.getString(MNEMONIC_KEY, "");
+            if (loadedMnemonic.length() > 10) {
+              Serial.println("L: Mnemonic loaded, proceeding to PIN entry");
+              currentState = STATE_PASSWORD_ENTRY;
+              currentDigitIndex = 0;
+              currentDigitValue = 0;
+              passwordConfirmed = false;
+              memset(password, '_', PIN_LENGTH);
+              password[PIN_LENGTH] = '\0';
+            } else {
+              errorMessage = "Invalid Mnemonic Loaded";
+              displayErrorScreen(errorMessage);
+              currentState = STATE_ERROR;
+            }
+          } else {
+            // Generate new mnemonic
+            uint8_t ent[16];
+            esp_fill_random(ent, 16);
+            generatedMnemonic = generateMnemonicFromEntropy(ent, 16);
+            if (generatedMnemonic.length() > 0) {
+              Serial.println("L: New mnemonic generated: " + generatedMnemonic);
+              currentState = STATE_SHOW_GENERATED_MNEMONIC;
+            } else {
+              errorMessage = "Key Gen Fail!";
+              displayErrorScreen(errorMessage);
+              currentState = STATE_ERROR;
+            }
+          }
           prefs.end();
         } else {
-          Serial.println("W: Prefs RW Fail for saving blockchain index");
+          Serial.println("W: Prefs RW Fail for blockchain/provision check");
+          errorMessage = "Storage Access Error";
+          displayErrorScreen(errorMessage);
+          currentState = STATE_ERROR;
         }
-        currentState = STATE_PASSWORD_ENTRY;
-        currentDigitIndex = 0;
-        currentDigitValue = 0;
-        passwordConfirmed = false;
-        memset(password, '_', PIN_LENGTH);
-        password[PIN_LENGTH] = '\0';
       }
       break;
 
@@ -921,7 +959,7 @@ void loop() {
         if (sM && sF) {
           loadedMnemonic = generatedMnemonic;
           generatedMnemonic = "";
-          Serial.println("L: Saved OK -> Re-enter PIN for Wallet View");
+          Serial.println("L: Saved OK -> Enter PIN to proceed to wallet");
           currentState = STATE_PASSWORD_ENTRY;
           currentDigitIndex = 0;
           currentDigitValue = 0;
@@ -952,31 +990,15 @@ void loop() {
         if (currentDigitIndex >= PIN_LENGTH) {
           password[PIN_LENGTH] = '\0';
           Serial.print("L: Full PIN Entered: ");
-          Serial.print(password);
-          Serial.print(" (bytes: ");
-          for (int i = 0; i <= PIN_LENGTH; i++) {
-            Serial.print((uint8_t)password[i], HEX);
-            Serial.print(" ");
-          }
-          Serial.println(")");
+          Serial.println(password);
           Serial.print("L: Heap Before Derivation: ");
           Serial.println(heap_caps_get_free_size(MALLOC_CAP_DEFAULT));
           passwordConfirmed = true;
-          Serial.println("L: Checking provision status...");
-          bool ldOK = false, isPrv = false;
-          if (prefs.begin(PREFS_NAMESPACE, true)) {
-            isPrv = prefs.getBool(PROVISIONED_KEY, false);
-            if (isPrv && prefs.isKey(MNEMONIC_KEY)) {
-              loadedMnemonic = prefs.getString(MNEMONIC_KEY, "");
-              if (loadedMnemonic.length() > 10) ldOK = true;
-              Serial.printf("L: Mnemonic loaded, length: %d, ldOK: %d, content: %s\n", loadedMnemonic.length(), ldOK, loadedMnemonic.c_str());
-            } else {
-              Serial.println("L: No mnemonic or not provisioned");
-            }
-            prefs.end();
-          } else {
-            Serial.println("E: Prefs RO Fail for mnemonic check");
-            errorMessage = "Storage Read Error";
+          Serial.println("L: Validating mnemonic and deriving keys...");
+          HDPrivateKey hdMasterKey(loadedMnemonic, "", blockchains[selectedBlockchainIndex].network);
+          if (!hdMasterKey.isValid()) {
+            errorMessage = "MasterKey Invalid";
+            Serial.println("E: " + errorMessage);
             displayErrorScreen(errorMessage);
             passwordConfirmed = false;
             currentDigitIndex = 0;
@@ -986,65 +1008,17 @@ void loop() {
             currentState = STATE_ERROR;
             break;
           }
-          Serial.printf("L: Loaded Mnemonic OK = %d, Provisioned = %d\n", ldOK, isPrv);
-          if (ldOK) {
-            Serial.println("L: Validating mnemonic and deriving keys...");
-            HDPrivateKey hdMasterKey(loadedMnemonic, "", blockchains[selectedBlockchainIndex].network);
-            if (!hdMasterKey.isValid()) {
-              errorMessage = "MasterKey Invalid";
-              Serial.println("E: " + errorMessage);
-              displayErrorScreen(errorMessage);
-              passwordConfirmed = false;
-              currentDigitIndex = 0;
-              currentDigitValue = 0;
-              memset(password, '_', PIN_LENGTH);
-              password[PIN_LENGTH] = '\0';
-              currentState = STATE_ERROR;
-              break;
-            }
-            Serial.println("L: Deriving secure path...");
-            uint32_t indices[3];
-            String pathSegment = "/" + String(blockchains[selectedBlockchainIndex].derivationIndex) + "'";
-            HDPrivateKey currentNode = deriveHardened(hdMasterKey, blockchains[selectedBlockchainIndex].derivationIndex);
-            for (int level = 0; level < 3; level++) {
-              indices[level] = deriveIndex(String(password), level);
-              currentNode = deriveHardened(currentNode, indices[level]);
-              pathSegment += "/" + String(indices[level]) + "'";
-              Serial.printf("L: Path level %d: %u'\n", level, indices[level]);
-              Serial.print("L: Heap During Derivation: ");
-              Serial.println(heap_caps_get_free_size(MALLOC_CAP_DEFAULT));
-              if (!currentNode.isValid()) {
-                errorMessage = "Derivation Failed at Level " + String(level);
-                Serial.println("E: " + errorMessage);
-                displayErrorScreen(errorMessage);
-                passwordConfirmed = false;
-                currentDigitIndex = 0;
-                currentDigitValue = 0;
-                memset(password, '_', PIN_LENGTH);
-                password[PIN_LENGTH] = '\0';
-                currentState = STATE_ERROR;
-                break;
-              }
-            }
-            if (currentState == STATE_ERROR) break;
-            hdWalletKey = currentNode;
-            baseWalletPath = pathSegment;
-            Serial.println("L: Base wallet path: m" + baseWalletPath);
-            Serial.print("L: Heap After Derivation: ");
-            Serial.println(heap_caps_get_free_size(MALLOC_CAP_DEFAULT));
-            Serial.println("L: Key derivation successful, transitioning to Wallet View");
-            currentState = STATE_WALLET_VIEW;
-            currentRotationIndex = 0;
-          } else {
-            Serial.println("L: Not provisioned or mnemonic load failed. Generating new keys...");
-            uint8_t ent[16];
-            esp_fill_random(ent, 16);
-            generatedMnemonic = generateMnemonicFromEntropy(ent, 16);
-            if (generatedMnemonic.length() > 0) {
-              Serial.println("L: New mnemonic generated: " + generatedMnemonic);
-              currentState = STATE_SHOW_GENERATED_MNEMONIC;
-            } else {
-              errorMessage = "Key Gen Fail!";
+          Serial.println("L: Deriving secure path...");
+          uint32_t indices[3];
+          String pathSegment = "/" + String(blockchains[selectedBlockchainIndex].derivationIndex) + "'";
+          HDPrivateKey currentNode = deriveHardened(hdMasterKey, blockchains[selectedBlockchainIndex].derivationIndex);
+          for (int level = 0; level < 3; level++) {
+            indices[level] = deriveIndex(String(password), level);
+            currentNode = deriveHardened(currentNode, indices[level]);
+            pathSegment += "/" + String(indices[level]) + "'";
+            Serial.printf("L: Path level %d: %u'\n", level, indices[level]);
+            if (!currentNode.isValid()) {
+              errorMessage = "Derivation Failed at Level " + String(level);
               Serial.println("E: " + errorMessage);
               displayErrorScreen(errorMessage);
               passwordConfirmed = false;
@@ -1056,6 +1030,15 @@ void loop() {
               break;
             }
           }
+          if (currentState == STATE_ERROR) break;
+          hdWalletKey = currentNode;
+          baseWalletPath = pathSegment;
+          Serial.println("L: Base wallet path: m" + baseWalletPath);
+          Serial.print("L: Heap After Derivation: ");
+          Serial.println(heap_caps_get_free_size(MALLOC_CAP_DEFAULT));
+          Serial.println("L: Key derivation successful, transitioning to Wallet View");
+          currentState = STATE_WALLET_VIEW;
+          currentRotationIndex = 0;
         } else {
           showPasswordEntryScreen();
           Serial.printf("L: Digit entered, index now %d\n", currentDigitIndex);
@@ -1066,193 +1049,223 @@ void loop() {
     case STATE_WALLET_VIEW: {
       bool walletNeedsRedraw = redrawScreen;
       if (buttonSecretTriggered) {
-          Serial.println("L: Wallet: Secret Button -> Show Secret Mnemonic");
-          currentState = STATE_SHOW_SECRET_MNEMONIC;
-          goto end_wallet_view_logic;
+        Serial.println("L: Wallet: Secret Button -> Show Secret Mnemonic");
+        currentState = STATE_SHOW_SECRET_MNEMONIC;
+        goto end_wallet_view_logic;
       } else if (buttonJumpTriggered) {
-          Serial.println("L: Wallet: Jump Button -> Jump Entry");
-          currentState = STATE_JUMP_ENTRY;
-          currentJumpDigitIndex = 0;
-          currentJumpDigitValue = 0;
-          memset(jumpIndex, '_', JUMP_INDEX_LENGTH);
-          jumpIndex[JUMP_INDEX_LENGTH] = '\0';
-          goto end_wallet_view_logic;
-      } else if (buttonLeftTriggered) {
-          currentRotationIndex = (currentRotationIndex == 0) ? MAX_ROTATION_INDEX : currentRotationIndex - 1;
-          Serial.printf("L: Wallet: Prev Rotation -> %d\n", currentRotationIndex);
-          walletNeedsRedraw = true;
+        Serial.println("L: Wallet: Jump Button -> Jump Entry");
+        currentState = STATE_JUMP_ENTRY;
+        currentJumpDigitIndex = 0;
+        currentJumpDigitValue = 0;
+        memset(jumpIndex, '_', JUMP_INDEX_LENGTH);
+        jumpIndex[JUMP_INDEX_LENGTH] = '\0';
+        goto end_wallet_view_logic;
+      } else if (buttonLeftTriggered && currentRotationIndex > 0) {
+        currentRotationIndex = currentRotationIndex - 1;
+        Serial.printf("L: Wallet: Prev Rotation -> %d\n", currentRotationIndex);
+        walletNeedsRedraw = true;
       } else if (buttonRightTriggered) {
-          currentRotationIndex = (currentRotationIndex + 1) % (MAX_ROTATION_INDEX + 1);
-          Serial.printf("L: Wallet: Next Rotation -> %d\n", currentRotationIndex);
-          walletNeedsRedraw = true;
+        currentRotationIndex = (currentRotationIndex + 1) % (MAX_ROTATION_INDEX + 1);
+        Serial.printf("L: Wallet: Next Rotation -> %d\n", currentRotationIndex);
+        walletNeedsRedraw = true;
       }
       if (walletNeedsRedraw) {
-          Serial.printf("L: Redrawing Wallet R%d (WIF format)\n", currentRotationIndex);
-          Serial.print("L: Heap Before Wallet Redraw: ");
-          Serial.println(heap_caps_get_free_size(MALLOC_CAP_DEFAULT));
-          if (loadedMnemonic.length() == 0) {
+        Serial.printf("L: Redrawing Wallet R%d (WIF format)\n", currentRotationIndex);
+        Serial.print("L: Heap Before Wallet Redraw: ");
+        Serial.println(heap_caps_get_free_size(MALLOC_CAP_DEFAULT));
+        if (loadedMnemonic.length() == 0) {
           errorMessage = "Mnem Missing!";
           displayErrorScreen(errorMessage);
           break;
-          }
-          if (!passwordConfirmed) {
+        }
+        if (!passwordConfirmed) {
           errorMessage = "PIN Not Confirmed";
           displayErrorScreen(errorMessage);
           break;
-          }
-          if (!hdWalletKey.isValid()) {
+        }
+        if (!hdWalletKey.isValid()) {
           errorMessage = "hdWallet Key Invalid";
           displayErrorScreen(errorMessage);
           break;
-          }
-          Serial.print("PIN used for rotation: ");
-          Serial.print(password);
-          Serial.print(" (bytes: ");
-          for (int i = 0; i <= PIN_LENGTH; i++) {
+        }
+        Serial.print("PIN used for rotation: ");
+        Serial.print(password);
+        Serial.print(" (bytes: ");
+        for (int i = 0; i <= PIN_LENGTH; i++) {
           Serial.print((uint8_t)password[i], HEX);
           Serial.print(" ");
-          }
-          Serial.println(")");
-          uint32_t indices[3];
-          String rotationPathSegment = "";
-          for (int l = 0; l < 3; l++) {
+        }
+        Serial.println(")");
+        uint32_t indices[3];
+        String rotationPathSegment = "";
+        for (int l = 0; l < 3; l++) {
           indices[l] = deriveIndex(password, l);
           rotationPathSegment += (l > 0 ? "/" : "") + String(indices[l]) + "'";
-          }
-          HDPrivateKey parentKey = hdWalletKey;
-          for (int r = 0; r < currentRotationIndex; r++) {
+        }
+        HDPrivateKey parentKey = hdWalletKey;
+        for (int r = 0; r < currentRotationIndex; r++) {
           parentKey = parentKey.derive(rotationPathSegment.c_str());
           if (!parentKey.isValid()) {
-              errorMessage = "Parent Key Invalid (Rotation " + String(r) + ", PathSeg: " + rotationPathSegment + ")";
-              displayErrorScreen(errorMessage);
-              goto end_wallet_view_logic;
+            errorMessage = "Parent Key Invalid (Rotation " + String(r) + ", PathSeg: " + rotationPathSegment + ")";
+            displayErrorScreen(errorMessage);
+            goto end_wallet_view_logic;
           }
-          }
-          HDPrivateKey currentKey = parentKey;
-          if (!currentKey.isValid()) {
+        }
+        HDPrivateKey currentKey = parentKey;
+        if (!currentKey.isValid()) {
           errorMessage = "Current Key Invalid";
           displayErrorScreen(errorMessage);
           goto end_wallet_view_logic;
-          }
-          bool saveSuccess = false;
-          if (prefs.begin(PREFS_NAMESPACE, false)) {
+        }
+        bool saveSuccess = false;
+        if (prefs.begin(PREFS_NAMESPACE, false)) {
           if (prefs.putInt(ROTATION_INDEX_KEY, currentRotationIndex)) {
-              Serial.printf("L: Saved Rotation Index %d\n", currentRotationIndex);
+            Serial.printf("L: Saved Rotation Index %d\n", currentRotationIndex);
           } else {
-              Serial.println("W: Failed to save Rotation Index");
+            Serial.println("W: Failed to save Rotation Index");
           }
           uint8_t chaincode[32];
           memcpy(chaincode, currentKey.chainCode, 32);
           String chaincodeHex = bytesToHex(chaincode, 32);
           if (prefs.putString(CHAINCODE_KEY, chaincodeHex.c_str())) {
-              Serial.println("L: Saved Chaincode: " + chaincodeHex);
-              saveSuccess = true;
+            Serial.println("L: Saved Chaincode: " + chaincodeHex);
+            saveSuccess = true;
           } else {
-              Serial.println("W: Failed to save Chaincode");
+            Serial.println("W: Failed to save Chaincode");
           }
           prefs.end();
-          } else {
+        } else {
           Serial.println("W: Prefs RW Fail for saving chaincode/rotation");
-          }
-          HDPrivateKey preRotatedKey = currentKey.derive(rotationPathSegment.c_str());
-          if (!preRotatedKey.isValid()) {
+        }
+        HDPrivateKey preRotatedKey = currentKey.derive(rotationPathSegment.c_str());
+        if (!preRotatedKey.isValid()) {
           errorMessage = "Pre-Rotated Key Invalid (PathSeg: " + rotationPathSegment + ")";
           displayErrorScreen(errorMessage);
           goto end_wallet_view_logic;
-          }
-          HDPrivateKey twicePreRotatedKey = preRotatedKey.derive(rotationPathSegment.c_str());
-          if (!twicePreRotatedKey.isValid()) {
+        }
+        HDPrivateKey twicePreRotatedKey = preRotatedKey.derive(rotationPathSegment.c_str());
+        if (!twicePreRotatedKey.isValid()) {
           errorMessage = "Twice-Pre-Rotated Key Invalid (PathSeg: " + rotationPathSegment + ")";
           displayErrorScreen(errorMessage);
           goto end_wallet_view_logic;
+        }
+        String public_key_hash_prev = "";
+        if (currentRotationIndex > 0) {
+          HDPrivateKey prevParentKey = hdWalletKey;
+          for (int r = 0; r < currentRotationIndex - 1; r++) {
+            prevParentKey = prevParentKey.derive(rotationPathSegment.c_str());
+            if (!prevParentKey.isValid()) {
+              errorMessage = "Prev Parent Key Invalid (Rotation " + String(r) + ")";
+              displayErrorScreen(errorMessage);
+              goto end_wallet_view_logic;
+            }
           }
-          String public_key_hash_prev = "";
-          if (currentRotationIndex > 0) {
-              HDPrivateKey prevParentKey = hdWalletKey;
-              for (int r = 0; r < currentRotationIndex - 1; r++) {
-                  prevParentKey = prevParentKey.derive(rotationPathSegment.c_str());
-                  if (!prevParentKey.isValid()) {
-                      errorMessage = "Prev Parent Key Invalid (Rotation " + String(r) + ")";
-                      displayErrorScreen(errorMessage);
-                      goto end_wallet_view_logic;
-                  }
-              }
-              PublicKey prevPublicKey = prevParentKey.publicKey();
-              prevPublicKey.compressed = false; // Set to uncompressed
-              if (String(blockchains[selectedBlockchainIndex].name) == "BSC") {
-                  unsigned char hash_n_minus_1[32];
-                  keccak256Address(prevPublicKey, hash_n_minus_1);
-                  public_key_hash_prev = "0x" + bytesToHex(hash_n_minus_1 + 12, 20); // Last 20 bytes
-              } else {
-                  public_key_hash_prev = prevPublicKey.address(blockchains[selectedBlockchainIndex].network);
-              }
-              if (public_key_hash_prev.length() == 0) {
-                  errorMessage = "Prev Address Gen Error";
-                  displayErrorScreen(errorMessage);
-                  goto end_wallet_view_logic;
-              }
-              Serial.printf("L: Previous Rotation %d Address: %s\n", currentRotationIndex - 1, public_key_hash_prev.c_str());
-          } else {
-              Serial.println("L: Index 0, public_key_hash_prev set to blank");
-          }
-          String wif_n;
-          String addr_n_plus_1;
-          String addr_n_plus_2;
+          PublicKey prevPublicKey = prevParentKey.publicKey();
+          prevPublicKey.compressed = false; // Set to uncompressed
           if (String(blockchains[selectedBlockchainIndex].name) == "BSC") {
-              wif_n = currentKey.wif();
-              unsigned char hash_n_plus_1[32];
-              unsigned char hash_n_plus_2[32];
-              
-              // Derive public keys and set uncompressed format
-              PublicKey pubKey1 = preRotatedKey.publicKey();
-              pubKey1.compressed = false; // Set to uncompressed
-              Serial.println("preRotatedKey Public Key: " + pubKey1.toString());
-              keccak256Address(pubKey1, hash_n_plus_1);
-              
-              PublicKey pubKey2 = twicePreRotatedKey.publicKey();
-              pubKey2.compressed = false; // Set to uncompressed
-              Serial.println("twicePreRotatedKey Public Key: " + pubKey2.toString());
-              keccak256Address(pubKey2, hash_n_plus_2);
-              
-              addr_n_plus_1 = "0x" + bytesToHex(hash_n_plus_1 + 12, 20);
-              addr_n_plus_2 = "0x" + bytesToHex(hash_n_plus_2 + 12, 20);
-              Serial.println("BSC Address n+1: " + addr_n_plus_1);
-              Serial.println("BSC Address n+2: " + addr_n_plus_2);
+            unsigned char hash_n_minus_1[32];
+            keccak256Address(prevPublicKey, hash_n_minus_1);
+            public_key_hash_prev = "0x" + bytesToHex(hash_n_minus_1 + 12, 20); // Last 20 bytes
           } else {
-              // YadaCoin: Use Bitcoin-style addresses
-              wif_n = currentKey.wif();
-              addr_n_plus_1 = preRotatedKey.publicKey().address(blockchains[selectedBlockchainIndex].network);
-              addr_n_plus_2 = twicePreRotatedKey.publicKey().address(blockchains[selectedBlockchainIndex].network);
+            public_key_hash_prev = prevPublicKey.address(blockchains[selectedBlockchainIndex].network);
           }
-          bool derivation_ok = true;
-          String error_msg_detail = "";
-          if (wif_n.length() == 0) {
-              error_msg_detail = "WIF_n Gen Fail";
-              derivation_ok = false;
+          if (public_key_hash_prev.length() == 0) {
+            errorMessage = "Prev Address Gen Error";
+            displayErrorScreen(errorMessage);
+            goto end_wallet_view_logic;
           }
-          if (derivation_ok && addr_n_plus_1.length() == 0) {
-              error_msg_detail = "Addr_n+1 Gen Fail";
-              derivation_ok = false;
-          }
-          if (derivation_ok && addr_n_plus_2.length() == 0) {
-              error_msg_detail = "Addr_n+2 Gen Fail";
-              derivation_ok = false;
-          }
-          if (derivation_ok && currentRotationIndex > 0 && public_key_hash_prev.length() == 0) {
-              error_msg_detail = "Prev Address Gen Fail";
-              derivation_ok = false;
-          }
-          if (derivation_ok) {
-              String combinedQRData = wif_n + "|" + addr_n_plus_1 + "|" + addr_n_plus_2 + "|" + public_key_hash_prev + "|" + String(currentRotationIndex);
-              Serial.println("QR Data: " + combinedQRData);
-              Serial.println("QR Data Length: " + String(combinedQRData.length()));
-              int estimatedQrVersion = 12;
-              displaySingleRotationQR(currentRotationIndex, combinedQRData, "Rotation", estimatedQrVersion);
+          Serial.printf("L: Previous Rotation %d Address: %s\n", currentRotationIndex - 1, public_key_hash_prev.c_str());
+        } else {
+          Serial.println("L: Index 0, public_key_hash_prev set to blank");
+        }
+        String wif_n;
+        String addr_n_plus_1;
+        String addr_n_plus_2;
+        if (String(blockchains[selectedBlockchainIndex].name) == "BSC") {
+          wif_n = currentKey.wif();
+          unsigned char hash_n_plus_1[32];
+          unsigned char hash_n_plus_2[32];
+          
+          // Derive public keys and set uncompressed format
+          PublicKey pubKey1 = preRotatedKey.publicKey();
+          pubKey1.compressed = false; // Set to uncompressed
+          Serial.println("preRotatedKey Public Key: " + pubKey1.toString());
+          keccak256Address(pubKey1, hash_n_plus_1);
+          
+          PublicKey pubKey2 = twicePreRotatedKey.publicKey();
+          pubKey2.compressed = false; // Set to uncompressed
+          Serial.println("twicePreRotatedKey Public Key: " + pubKey2.toString());
+          keccak256Address(pubKey2, hash_n_plus_2);
+          
+          addr_n_plus_1 = "0x" + bytesToHex(hash_n_plus_1 + 12, 20);
+          addr_n_plus_2 = "0x" + bytesToHex(hash_n_plus_2 + 12, 20);
+          Serial.println("BSC Address n+1: " + addr_n_plus_1);
+          Serial.println("BSC Address n+2: " + addr_n_plus_2);
+        } else {
+          // YadaCoin: Use Bitcoin-style addresses
+          wif_n = currentKey.wif();
+          addr_n_plus_1 = preRotatedKey.publicKey().address(blockchains[selectedBlockchainIndex].network);
+          addr_n_plus_2 = twicePreRotatedKey.publicKey().address(blockchains[selectedBlockchainIndex].network);
+        }
+        bool derivation_ok = true;
+        String error_msg_detail = "";
+        if (wif_n.length() == 0) {
+          error_msg_detail = "WIF_n Gen Fail";
+          derivation_ok = false;
+        }
+        if (derivation_ok && addr_n_plus_1.length() == 0) {
+          error_msg_detail = "Addr_n+1 Gen Fail";
+          derivation_ok = false;
+        }
+        if (derivation_ok && addr_n_plus_2.length() == 0) {
+          error_msg_detail = "Addr_n+2 Gen Fail";
+          derivation_ok = false;
+        }
+        if (derivation_ok && currentRotationIndex > 0 && public_key_hash_prev.length() == 0) {
+          error_msg_detail = "Prev Address Gen Fail";
+          derivation_ok = false;
+        }
+        if (derivation_ok) {
+          String combinedQRData = wif_n + "|" + addr_n_plus_1 + "|" + addr_n_plus_2 + "|" + public_key_hash_prev + "|" + String(currentRotationIndex);
+          Serial.println("QR Data: " + combinedQRData);
+          Serial.println("QR Data Length: " + String(combinedQRData.length()));
+          int estimatedQrVersion = 12;
+          
+          // Initialize buttons based on currentRotationIndex
+          int numButtons = (currentRotationIndex > 0) ? 4 : 3; // Include BTN_LEFT only if rotation > 0
+          int leftButtonCenterX = 65;
+          int leftButtonCenterY = 205;
+          int rightButtonCenterX = 255;
+          int rightButtonCenterY = 205;
+          int secretButtonCenterX = tft.width() - (SECRET_BUTTON_SIZE / 2) - 5;
+          int secretButtonCenterY = (SECRET_BUTTON_SIZE / 2) + 5;
+          int jumpButtonCenterX = tft.width() - (SECRET_BUTTON_SIZE / 2) - 5;
+          int jumpButtonCenterY = (SECRET_BUTTON_SIZE / 2) + 5 + SECRET_BUTTON_SIZE + 5;
+          
+          // Always initialize BTN_RIGHT, BTN_SECRET, and BTN_JUMP
+          buttons[BTN_RIGHT].initButton(&tft, rightButtonCenterX, rightButtonCenterY, BUTTON_W, BUTTON_H, TFT_WHITE, TFT_BLUE, TFT_BLACK, "Next >", 2);
+          buttons[BTN_SECRET].initButton(&tft, secretButtonCenterX, secretButtonCenterY, SECRET_BUTTON_SIZE, SECRET_BUTTON_SIZE, TFT_WHITE, TFT_ORANGE, TFT_BLACK, "Seed", 1);
+          buttons[BTN_JUMP].initButton(&tft, jumpButtonCenterX, jumpButtonCenterY, SECRET_BUTTON_SIZE, SECRET_BUTTON_SIZE, TFT_WHITE, TFT_CYAN, TFT_BLACK, "Jump", 1);
+          
+          if (currentRotationIndex > 0) {
+            buttons[BTN_LEFT].initButton(&tft, leftButtonCenterX, leftButtonCenterY, BUTTON_W, BUTTON_H, TFT_WHITE, TFT_BLUE, TFT_BLACK, "< Prev", 2);
           } else {
-              displayErrorScreen(error_msg_detail.length() > 0 ? error_msg_detail : "Derivation Error");
+            // Explicitly clear BTN_LEFT to prevent any rendering
+            buttons[BTN_LEFT].initButton(&tft, 0, 0, 0, 0, TFT_TRANSPARENT, TFT_TRANSPARENT, TFT_TRANSPARENT, "", 0);
           }
-          Serial.print("L: Heap After Wallet Redraw: ");
-          Serial.println(heap_caps_get_free_size(MALLOC_CAP_DEFAULT));
+          
+          // Clear the area where BTN_LEFT would be to prevent artifacts
+          if (currentRotationIndex == 0) {
+            tft.fillRect(leftButtonCenterX - BUTTON_W / 2, leftButtonCenterY - BUTTON_H / 2, BUTTON_W, BUTTON_H, TFT_WHITE); // Match QR background
+          }
+          
+          // Draw QR code and buttons
+          displaySingleRotationQR(currentRotationIndex, combinedQRData, "Rotation", estimatedQrVersion);
+        } else {
+          displayErrorScreen(error_msg_detail.length() > 0 ? error_msg_detail : "Derivation Error");
+        }
+        Serial.print("L: Heap After Wallet Redraw: ");
+        Serial.println(heap_caps_get_free_size(MALLOC_CAP_DEFAULT));
       }
       end_wallet_view_logic:;
       break;

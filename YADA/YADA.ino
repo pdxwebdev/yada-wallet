@@ -132,7 +132,7 @@ HDPrivateKey hdWalletKey; // Stores derived key
 String baseWalletPath;    // Stores derivation path
 
 
-void keccak256Address(const PublicKey& key, unsigned char* output) {
+String keccak256Address(const PublicKey& key, unsigned char* output) {
     uint8_t input[64];
     String keyHex = key.toString(); // Should return uncompressed key
     Serial.print("Public Key: ");
@@ -144,7 +144,7 @@ void keccak256Address(const PublicKey& key, unsigned char* output) {
     if (keyHex.length() != 130 || keyHex.substring(0, 2) != "04") {
         Serial.println("E: Invalid public key format or length (expected 130 chars, starting with 04)");
         memset(output, 0, 32);
-        return;
+        return "";
     }
     
     // Convert hex to bytes, skipping "04" prefix
@@ -171,9 +171,10 @@ void keccak256Address(const PublicKey& key, unsigned char* output) {
     if (hash.length() != 64) {
         Serial.println("E: Invalid Keccak-256 hash length");
         memset(output, 0, 32);
-        return;
+        return "";
     }
     
+    // Copy the full 32-byte hash to output (for compatibility)
     for (size_t i = 0; i < 32; i++) {
         std::string hexByte = hash.substr(i * 2, 2);
         output[i] = (uint8_t)strtol(hexByte.c_str(), nullptr, 16);
@@ -182,11 +183,47 @@ void keccak256Address(const PublicKey& key, unsigned char* output) {
         }
     }
     
-    String address = "0x" + bytesToHex(output + 12, 20);
-    Serial.println("Generated Address: " + address);
+    // Generate the lowercase address (last 20 bytes)
+    String lowercaseAddress = bytesToHex(output + 12, 20);
+    Serial.println("Lowercase Address: " + lowercaseAddress);
+    
+    // Compute Keccak-256 hash of the lowercase address for EIP-55 checksum
+    Keccak keccakAddr(Keccak::Keccak256);
+    keccakAddr.add((const uint8_t*)lowercaseAddress.c_str(), lowercaseAddress.length());
+    std::string addrHash = keccakAddr.getHash();
+    
+    Serial.print("Address Keccak-256 Hash: ");
+    Serial.println(addrHash.c_str());
+    
+    if (addrHash.length() != 64) {
+        Serial.println("E: Invalid address Keccak-256 hash length");
+        memset(output, 0, 32);
+        return "";
+    }
+    
+    // Apply EIP-55 checksum
+    String checksumAddress = "0x";
+    checksumAddress.reserve(42); // "0x" + 40 hex chars
+    for (size_t i = 0; i < lowercaseAddress.length(); i++) {
+        char c = lowercaseAddress[i];
+        int hashNibble = hexCharToDec(addrHash[i]);
+        if (hashNibble < 0) {
+            Serial.println("E: Invalid character in address hash");
+            memset(output, 0, 32);
+            return "";
+        }
+        if (hashNibble >= 8 && c >= 'a' && c <= 'f') {
+            c = c - 'a' + 'A';
+        }
+        checksumAddress += c;
+    }
+    
+    Serial.println("Checksummed Address: " + checksumAddress);
     
     Serial.print("Heap After Keccak: ");
     Serial.println(heap_caps_get_free_size(MALLOC_CAP_DEFAULT));
+    
+    return checksumAddress;
 }
 
 // ========================================
@@ -1164,8 +1201,7 @@ void loop() {
           prevPublicKey.compressed = false; // Set to uncompressed
           if (String(blockchains[selectedBlockchainIndex].name) == "BSC") {
             unsigned char hash_n_minus_1[32];
-            keccak256Address(prevPublicKey, hash_n_minus_1);
-            public_key_hash_prev = "0x" + bytesToHex(hash_n_minus_1 + 12, 20); // Last 20 bytes
+            public_key_hash_prev = keccak256Address(prevPublicKey, hash_n_minus_1);
           } else {
             public_key_hash_prev = prevPublicKey.address(blockchains[selectedBlockchainIndex].network);
           }
@@ -1182,30 +1218,28 @@ void loop() {
         String addr_n_plus_1;
         String addr_n_plus_2;
         if (String(blockchains[selectedBlockchainIndex].name) == "BSC") {
-          wif_n = currentKey.wif();
-          unsigned char hash_n_plus_1[32];
-          unsigned char hash_n_plus_2[32];
-          
-          // Derive public keys and set uncompressed format
-          PublicKey pubKey1 = preRotatedKey.publicKey();
-          pubKey1.compressed = false; // Set to uncompressed
-          Serial.println("preRotatedKey Public Key: " + pubKey1.toString());
-          keccak256Address(pubKey1, hash_n_plus_1);
-          
-          PublicKey pubKey2 = twicePreRotatedKey.publicKey();
-          pubKey2.compressed = false; // Set to uncompressed
-          Serial.println("twicePreRotatedKey Public Key: " + pubKey2.toString());
-          keccak256Address(pubKey2, hash_n_plus_2);
-          
-          addr_n_plus_1 = "0x" + bytesToHex(hash_n_plus_1 + 12, 20);
-          addr_n_plus_2 = "0x" + bytesToHex(hash_n_plus_2 + 12, 20);
-          Serial.println("BSC Address n+1: " + addr_n_plus_1);
-          Serial.println("BSC Address n+2: " + addr_n_plus_2);
+            wif_n = currentKey.wif();
+            unsigned char hash_n_plus_1[32];
+            unsigned char hash_n_plus_2[32];
+            
+            // Derive public keys and set uncompressed format
+            PublicKey pubKey1 = preRotatedKey.publicKey();
+            pubKey1.compressed = false; // Set to uncompressed
+            Serial.println("preRotatedKey Public Key: " + pubKey1.toString());
+            addr_n_plus_1 = keccak256Address(pubKey1, hash_n_plus_1); // Use returned checksummed address
+            
+            PublicKey pubKey2 = twicePreRotatedKey.publicKey();
+            pubKey2.compressed = false; // Set to uncompressed
+            Serial.println("twicePreRotatedKey Public Key: " + pubKey2.toString());
+            addr_n_plus_2 = keccak256Address(pubKey2, hash_n_plus_2); // Use returned checksummed address
+            
+            Serial.println("BSC Address n+1: " + addr_n_plus_1);
+            Serial.println("BSC Address n+2: " + addr_n_plus_2);
         } else {
-          // YadaCoin: Use Bitcoin-style addresses
-          wif_n = currentKey.wif();
-          addr_n_plus_1 = preRotatedKey.publicKey().address(blockchains[selectedBlockchainIndex].network);
-          addr_n_plus_2 = twicePreRotatedKey.publicKey().address(blockchains[selectedBlockchainIndex].network);
+            // YadaCoin: Use Bitcoin-style addresses
+            wif_n = currentKey.wif();
+            addr_n_plus_1 = preRotatedKey.publicKey().address(blockchains[selectedBlockchainIndex].network);
+            addr_n_plus_2 = twicePreRotatedKey.publicKey().address(blockchains[selectedBlockchainIndex].network);
         }
         bool derivation_ok = true;
         String error_msg_detail = "";

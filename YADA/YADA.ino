@@ -653,8 +653,13 @@ void displaySecretMnemonicScreen(String m) {
       }
     } else cw += c;
   }
-  buttons[BTN_BACK].initButton(&tft, 65, 205, BUTTON_W, BUTTON_H, TFT_WHITE, TFT_BLUE, TFT_BLACK, "Back", 2);
-  drawButtons(1);
+  int backButtonCenterX = 65;
+  int backButtonCenterY = 205;
+  int importButtonCenterX = 255;
+  int importButtonCenterY = 205;
+  buttons[BTN_BACK].initButton(&tft, backButtonCenterX, backButtonCenterY, BUTTON_W, BUTTON_H, TFT_WHITE, TFT_BLUE, TFT_BLACK, "Back", 2);
+  buttons[BTN_RIGHT].initButton(&tft, importButtonCenterX, importButtonCenterY, BUTTON_W, BUTTON_H, TFT_WHITE, TFT_GREEN, TFT_BLACK, "Import", 2);
+  drawButtons(2);
 }
 
 void showPasswordEntryScreen() {
@@ -1631,6 +1636,13 @@ void loop() {
       if (buttonLeftTriggered) {
         Serial.println("L: Exit Secret Mnemonic screen.");
         currentState = STATE_WALLET_VIEW;
+      } else if (buttonRightTriggered) {
+        Serial.println("L: Import new mnemonic from Secret screen.");
+        currentState = STATE_MNEMONIC_IMPORT;
+        memset(wordIndices, 0, sizeof(wordIndices));
+        strcpy(currentWordBuffer, "");
+        currentWordIndex = 0;
+        cursorPos = 0;
       }
       break;
 

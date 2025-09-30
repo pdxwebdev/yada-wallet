@@ -1171,7 +1171,7 @@ void loop() {
       }
       break;
 
-        case STATE_MNEMONIC_IMPORT:
+    case STATE_MNEMONIC_IMPORT:
       if (redrawScreen) {
         showMnemonicImportScreen();
         Serial.println("L: Mnemonic Import Screen Redrawn");
@@ -1192,31 +1192,38 @@ void loop() {
         }
       }
       if (buttonLeftTriggered) {
-        // Cycle to next valid letter at cursor position
+        // Compute prefix up to (but not including) cursor position
         String prefix = String(currentWordBuffer).substring(0, cursorPos);
         String possibles = getPossibleNextLetters(prefix.c_str(), cursorPos);
         int len = strlen(currentWordBuffer);
-        char currentChar = (cursorPos < len) ? currentWordBuffer[cursorPos] : ' ';
-        int currentIdx = possibles.indexOf(currentChar);
-        if (currentIdx < 0) currentIdx = -1; // If invalid, start from beginning
-        char nextChar;
-        if (possibles.length() == 0) {
-          // No valid continuations, stay or reset
-          nextChar = currentChar;
+
+        // Early exit: If at end of buffer and no continuations (word complete), ignore cycle
+        if (possibles.length() == 0 && cursorPos == len) {
+          Serial.println("L: Cycle ignored - word appears complete; use Next to confirm");
+          showMnemonicImportScreen();  // Redraw to reflect no change
         } else {
-          int nextIdx = (currentIdx + 1) % possibles.length();
-          nextChar = possibles.charAt(nextIdx);
+          // Normal cycle logic
+          char currentChar = (cursorPos < len) ? currentWordBuffer[cursorPos] : ' ';
+          int currentIdx = possibles.indexOf(currentChar);
+          if (currentIdx < 0) currentIdx = -1;  // Invalid current, start from beginning
+          char nextChar;
+          if (possibles.length() == 0) {
+            nextChar = currentChar;  // Fallback (shouldn't reach here due to early exit)
+          } else {
+            int nextIdx = (currentIdx + 1) % possibles.length();
+            nextChar = possibles.charAt(nextIdx);
+          }
+          if (cursorPos < len) {
+            currentWordBuffer[cursorPos] = nextChar;
+          } else {
+            // Append only if valid continuation (guaranteed by possibles != "")
+            currentWordBuffer[cursorPos] = nextChar;
+            currentWordBuffer[cursorPos + 1] = '\0';
+          }
+          Serial.printf("L: Valid letter cycled at pos %d (word %d): %s (possibles: %s)\n", 
+                        cursorPos, currentWordIndex, currentWordBuffer, possibles.c_str());
+          showMnemonicImportScreen();
         }
-        if (cursorPos < len) {
-          currentWordBuffer[cursorPos] = nextChar;
-        } else {
-          // Append if at end
-          currentWordBuffer[cursorPos] = nextChar;
-          currentWordBuffer[cursorPos + 1] = '\0';
-        }
-        Serial.printf("L: Valid letter cycled at pos %d (word %d): %s (possibles: %s)\n", 
-                      cursorPos, currentWordIndex, currentWordBuffer, possibles.c_str());
-        showMnemonicImportScreen();
       } else if (buttonRightTriggered) {
         int len = strlen(currentWordBuffer);
         if (cursorPos < len) {

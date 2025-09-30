@@ -783,6 +783,11 @@ void showMnemonicImportScreen() {
   tft.setTextDatum(TL_DATUM);
   tft.setCursor(10, 110);
   tft.print("Preview: " + getFirstMatchingWord(currentWordBuffer));
+
+  if(strlen(currentWordBuffer) > 0) {
+    tft.setCursor(10, 150);
+    tft.print("Press and hold 'cycle ltr' for backspace.");
+  }
   
   // Set button label
   char nextLabel[6] = "Next";

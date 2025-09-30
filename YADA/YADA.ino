@@ -784,10 +784,18 @@ void showMnemonicImportScreen() {
   tft.setCursor(10, 110);
   tft.print("Preview: " + getFirstMatchingWord(currentWordBuffer));
   
+  // Set button label
   char nextLabel[6] = "Next";
-  uint16_t idx;
-  if (cursorPos == len && len >= 3 && isValidWord(currentWordBuffer, idx)) {
-    strcpy(nextLabel, "OK");
+  if (cursorPos == len) {
+    int matchCount = 0;
+    for (int i = 0; i < 2048; i++) {
+      if (strncmp(wordlist[i], currentWordBuffer, len) == 0) {
+        matchCount++;
+      }
+    }
+    if (matchCount == 1) {
+      strcpy(nextLabel, "OK");
+    }
   }
   int leftButtonCenterX = 65;
   int leftButtonCenterY = 205;
@@ -1194,7 +1202,7 @@ void loop() {
       if (buttonLeftTriggered) {
         // Compute prefix up to (but not including) cursor position
         String prefix = String(currentWordBuffer).substring(0, cursorPos);
-        String possibles = getPossibleNextLetters(prefix.c_str(), cursorPos);
+        String possibles = getPossibleNextLetters(prefix.c_str(), prefix.length());
         int len = strlen(currentWordBuffer);
 
         // Early exit: If at end of buffer and no continuations (word complete), ignore cycle
@@ -1231,12 +1239,22 @@ void loop() {
           cursorPos++;
           showMnemonicImportScreen();
         } else {
-          // At end
-          String firstMatch = getFirstMatchingWord(currentWordBuffer);
-          uint16_t idx;
-          if (len >= 3 && isValidWord(currentWordBuffer, idx)) {
-            wordIndices[currentWordIndex] = idx;
-            Serial.printf("L: Word %d confirmed: %s (index %d)\n", currentWordIndex + 1, currentWordBuffer, idx);
+          // At end: check for auto-complete or confirm
+          int matchCount = 0;
+          String theOnlyWord = "";
+          uint16_t theOnlyIndex = 0;
+          for (int i = 0; i < 2048; i++) {
+            if (strncmp(wordlist[i], currentWordBuffer, len) == 0) {
+              matchCount++;
+              theOnlyWord = wordlist[i];
+              theOnlyIndex = i;
+            }
+          }
+          if (matchCount == 1 && len > 0) {
+            // Auto-complete or confirm
+            strcpy(currentWordBuffer, theOnlyWord.c_str());
+            wordIndices[currentWordIndex] = theOnlyIndex;
+            Serial.printf("L: Word %d confirmed/auto-completed: %s (index %d)\n", currentWordIndex + 1, currentWordBuffer, theOnlyIndex);
             currentWordIndex++;
             if (currentWordIndex >= NUM_WORDS) {
               // Build and validate mnemonic
@@ -1282,7 +1300,7 @@ void loop() {
               showMnemonicImportScreen();
               Serial.printf("L: Word %d entered, now word %d\n", currentWordIndex, currentWordIndex + 1);
             }
-          } else if (firstMatch == "None") {
+          } else if (getFirstMatchingWord(currentWordBuffer) == "None") {
             // Invalid prefix
             Serial.println("E: Invalid prefix: no matching word for '" + String(currentWordBuffer) + "'");
             tft.fillScreen(TFT_RED);
@@ -1293,9 +1311,18 @@ void loop() {
             delay(1000);
             showMnemonicImportScreen();
           } else {
-            // Valid prefix but not ready to confirm (too short or incomplete)
-            Serial.println("L: Continue typing word (preview: " + firstMatch + ")");
-            showMnemonicImportScreen();
+            // Continue typing: append first possible letter
+            String possibles = getPossibleNextLetters(currentWordBuffer, len);
+            if (possibles.length() > 0) {
+              currentWordBuffer[len] = possibles.charAt(0);
+              currentWordBuffer[len + 1] = '\0';
+              cursorPos = len + 1;
+              Serial.println("L: Appended first possible letter: " + String(currentWordBuffer));
+              showMnemonicImportScreen();
+            } else {
+              Serial.println("L: No possible next letters");
+              showMnemonicImportScreen();
+            }
           }
         }
       }

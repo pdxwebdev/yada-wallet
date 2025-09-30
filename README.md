@@ -42,6 +42,7 @@ A air-gapped Yadacoin Hardware Wallet for ESP32, specifically demonstrated with 
       - `TFT_eSPI` (by Bodmer)
       - `XPT2046_Touchscreen` (by Paul Stoffregen)
       - `QRCodeGenerator` (by Felix Erdmann) - URL: [https://github.com/felixerdy/QRCodeGenerator]
+      - `Adafruit PN523` (by Adafruit)
 
     - **Manual Install for `BigNumber`:**
       - Download ZIP: [https://github.com/nickgammon/BigNumber](https://github.com/nickgammon/BigNumber)

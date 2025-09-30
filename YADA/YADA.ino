@@ -98,15 +98,23 @@ bool touchIsBeingHeld = false;
 // --- State Variables ---
 enum AppState {
   STATE_BLOCKCHAIN_SELECTION, // New state for selecting blockchain
+  STATE_WALLET_TYPE_SELECTION,
   STATE_INITIALIZING,
   STATE_SHOW_GENERATED_MNEMONIC,
   STATE_PASSWORD_ENTRY,
   STATE_WALLET_VIEW,
   STATE_SHOW_SECRET_MNEMONIC,
   STATE_ERROR,
-  STATE_JUMP_ENTRY
+  STATE_JUMP_ENTRY,
+  STATE_MNEMONIC_IMPORT
 };
 AppState currentState = STATE_BLOCKCHAIN_SELECTION; // Start with blockchain selection
+
+// Provisioned flag
+bool provisioned = false;
+
+// Wallet type selection
+bool newWalletMode = true;
 
 // --- Jump Entry State ---
 const int JUMP_INDEX_LENGTH = 4; // For MAX_ROTATION_INDEX=1000
@@ -122,6 +130,13 @@ int currentDigitIndex = 0;
 int currentDigitValue = 0;
 bool passwordConfirmed = false;
 
+// --- Mnemonic Import State ---
+const int NUM_WORDS = 12;
+uint16_t wordIndices[NUM_WORDS];
+char currentWordBuffer[9]; // Max BIP39 word length 8 + null
+int currentWordIndex = 0;
+int cursorPos = 0;
+
 // --- Wallet View State ---
 int currentRotationIndex = 0;
 const int MAX_ROTATION_INDEX = 1000; // Max address index
@@ -131,6 +146,30 @@ String loadedMnemonic = "";
 HDPrivateKey hdWalletKey; // Stores derived key
 String baseWalletPath;    // Stores derivation path
 
+const char* alphabet = "abcdefghijklmnopqrstuvwxyz";
+
+int getLetterIndex(char c) {
+  if (c >= 'a' && c <= 'z') return c - 'a';
+  return -1;
+}
+
+char getNextLetter(char c) {
+  int idx = getLetterIndex(c);
+  if (idx < 0) return 'a';
+  idx = (idx + 1) % 26;
+  return alphabet[idx];
+}
+
+bool isValidWord(const char* wordStr, uint16_t& index) {
+  if (strlen(wordStr) < 3 || strlen(wordStr) > 8) return false;
+  for (uint16_t i = 0; i < 2048; i++) {
+    if (strcmp(wordStr, wordlist[i]) == 0) {
+      index = i;
+      return true;
+    }
+  }
+  return false;
+}
 
 String keccak256Address(const PublicKey& key, unsigned char* output) {
     uint8_t input[64];
@@ -224,6 +263,70 @@ String keccak256Address(const PublicKey& key, unsigned char* output) {
     Serial.println(heap_caps_get_free_size(MALLOC_CAP_DEFAULT));
     
     return checksumAddress;
+}
+
+bool validateMnemonic(const String& mnemonic) {
+  if (mnemonic.length() < 10) return false;
+  String tM = mnemonic + " ";
+  int wordCount = 0;
+  String words[12];
+  int pos = 0;
+  for (int i = 0; i < tM.length(); i++) {
+    if (tM.charAt(i) == ' ') {
+      if (pos < i) {
+        words[wordCount] = tM.substring(pos, i);
+        wordCount++;
+      }
+      pos = i + 1;
+    }
+  }
+  if (wordCount != 12) return false;
+
+  uint16_t indices[12];
+  for (int i = 0; i < 12; i++) {
+    indices[i] = 65535; // Invalid
+    for (int j = 0; j < 2048; j++) {
+      if (words[i] == wordlist[j]) {
+        indices[i] = j;
+        break;
+      }
+    }
+    if (indices[i] == 65535) return false;
+  }
+
+  // Pack bits
+  uint8_t entropy[16];
+  memset(entropy, 0, 16);
+  uint8_t cs = 0;
+  int bitCount = 0;
+  int byteIdx = 0;
+  int csBitPos = 0;
+  for (int w = 0; w < 12; w++) {
+    uint16_t idx = indices[w];
+    for (int b = 10; b >= 0; b--) {
+      uint8_t bitVal = (idx >> b) & 1;
+      if (bitCount < 128) {
+        int bitInByte = bitCount % 8;
+        if (bitVal) {
+          entropy[byteIdx] |= (1 << (7 - bitInByte));
+        }
+        bitCount++;
+        if (bitCount % 8 == 0) byteIdx++;
+      } else {
+        if (bitVal) {
+          cs |= (1 << (3 - csBitPos));
+        }
+        csBitPos++;
+      }
+    }
+  }
+
+  // Compute checksum
+  uint8_t hash[32];
+  if (!sha256Raw(entropy, 16, hash)) return false;
+  uint8_t expectedCs = hash[0] >> 4;
+
+  return expectedCs == cs;
 }
 
 // ========================================
@@ -636,6 +739,60 @@ void showJumpEntryScreen() {
   drawButtons(2);
 }
 
+void showWalletTypeSelectionScreen() {
+  tft.fillScreen(TFT_DARKCYAN);
+  tft.setTextColor(TFT_WHITE, TFT_DARKCYAN);
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextSize(2);
+  tft.drawString("Wallet Setup", tft.width() / 2, 30);
+  String choice = newWalletMode ? "New Wallet" : "Import Wallet";
+  tft.setTextSize(3);
+  tft.drawString(choice, tft.width() / 2, tft.height() / 2);
+  int leftButtonCenterX = 65;
+  int leftButtonCenterY = 205;
+  int rightButtonCenterX = 255;
+  int rightButtonCenterY = 205;
+  buttons[BTN_CYCLE].initButton(&tft, leftButtonCenterX, leftButtonCenterY, BUTTON_W, BUTTON_H, TFT_WHITE, TFT_BLUE, TFT_BLACK, "Cycle", 2);
+  buttons[BTN_CONFIRM].initButton(&tft, rightButtonCenterX, rightButtonCenterY, BUTTON_W, BUTTON_H, TFT_WHITE, TFT_GREEN, TFT_BLACK, "Proceed", 2);
+  drawButtons(2);
+}
+
+void showMnemonicImportScreen() {
+  tft.fillScreen(TFT_DARKCYAN);
+  tft.setTextColor(TFT_WHITE, TFT_DARKCYAN);
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextSize(2);
+  String title = "Import Word " + String(currentWordIndex + 1) + "/" + String(NUM_WORDS);
+  tft.drawString(title, tft.width() / 2, 30);
+  String disp = String(currentWordBuffer);
+  int len = strlen(currentWordBuffer);
+  if (cursorPos <= len) {
+    disp = String(currentWordBuffer).substring(0, cursorPos) + "|" + String(currentWordBuffer).substring(cursorPos);
+  } else {
+    disp += "|";
+  }
+  tft.drawString(disp, tft.width() / 2, 80);
+  
+  // Preview first matching word
+  tft.setTextSize(1);
+  tft.setTextDatum(TL_DATUM);
+  tft.setCursor(10, 110);
+  tft.print("Preview: " + getFirstMatchingWord(currentWordBuffer));
+  
+  char nextLabel[6] = "Next";
+  uint16_t idx;
+  if (cursorPos == len && len >= 3 && isValidWord(currentWordBuffer, idx)) {
+    strcpy(nextLabel, "OK");
+  }
+  int leftButtonCenterX = 65;
+  int leftButtonCenterY = 205;
+  int rightButtonCenterX = 255;
+  int rightButtonCenterY = 205;
+  buttons[BTN_CYCLE].initButton(&tft, leftButtonCenterX, leftButtonCenterY, BUTTON_W, BUTTON_H, TFT_WHITE, TFT_BLUE, TFT_BLACK, "Cycle Ltr", 1);
+  buttons[BTN_NEXT].initButton(&tft, rightButtonCenterX, rightButtonCenterY, BUTTON_W, BUTTON_H, TFT_WHITE, TFT_GREEN, TFT_BLACK, nextLabel, 1);
+  drawButtons(2);
+}
+
 void showBlockchainSelectionScreen() {
   tft.fillScreen(TFT_DARKCYAN);
   tft.setTextColor(TFT_WHITE, TFT_DARKCYAN);
@@ -770,7 +927,7 @@ void readButtons() {
     int rightBtnL = -15, rightBtnR = 85, rightBtnT = 20, rightBtnB = 70;
     if (t_x >= rightBtnL && t_x <= rightBtnR && t_y >= rightBtnT && t_y <= rightBtnB) {
       currentRightContainsManual = true;
-      Serial.println("L: Touch in Right Button (Next/Confirm/OK)");
+      Serial.println("L: Right Button (Next/Confirm/OK)");
     }
     int secretBtnL = 282, secretBtnR = 318, secretBtnT = 2, secretBtnB = 38;
     if (t_x >= secretBtnL && t_x <= secretBtnR && t_y >= secretBtnT && t_y <= secretBtnB) {
@@ -816,7 +973,7 @@ void readButtons() {
 void setup() {
   Serial.begin(115200);
   while (!Serial && millis() < 2000);
-  Serial.println("\n\n--- Yada HW (TFT+Touch - PR #1 + Blockchain Selection) ---");
+  Serial.println("\n\n--- Yada HW (TFT+Touch - PR #1 + Blockchain Selection + Mnemonic Import Letters) ---");
   Serial.print("Setup: Init Heap: ");
   Serial.println(heap_caps_get_free_size(MALLOC_CAP_DEFAULT));
   pinMode(TOUCH_IRQ, INPUT);
@@ -847,6 +1004,11 @@ void setup() {
   currentJumpDigitIndex = 0;
   currentJumpDigitValue = 0;
   Serial.println("Setup: Pwd State OK.");
+  strcpy(currentWordBuffer, "");
+  memset(wordIndices, 0, sizeof(wordIndices));
+  currentWordIndex = 0;
+  cursorPos = 0;
+  newWalletMode = true;
   if (!prefs.begin(PREFS_NAMESPACE, false)) {
     Serial.println("W: Prefs RW Fail. Trying RO...");
     if (!prefs.begin(PREFS_NAMESPACE, true)) {
@@ -864,25 +1026,33 @@ void setup() {
     prefs.end();
   }
   bool prv = false;
+  String loadedM = "";
+  int rotIdx = 0;
+  int blkIdx = 0;
   if (prefs.begin(PREFS_NAMESPACE, true)) {
     prv = prefs.getBool(PROVISIONED_KEY, false);
-    currentRotationIndex = prefs.getInt(ROTATION_INDEX_KEY, 0);
-    selectedBlockchainIndex = prefs.getInt(BLOCKCHAIN_INDEX_KEY, 0);
-    if (selectedBlockchainIndex < 0 || selectedBlockchainIndex >= NUM_BLOCKCHAINS) {
-      selectedBlockchainIndex = 0;
+    loadedM = prefs.getString(MNEMONIC_KEY, "");
+    rotIdx = prefs.getInt(ROTATION_INDEX_KEY, 0);
+    blkIdx = prefs.getInt(BLOCKCHAIN_INDEX_KEY, 0);
+    if (blkIdx < 0 || blkIdx >= NUM_BLOCKCHAINS) {
+      blkIdx = 0;
     }
     Serial.print("Setup: Restored Blockchain Index = ");
-    Serial.println(selectedBlockchainIndex);
+    Serial.println(blkIdx);
     Serial.print("Setup: Restored Rotation Index = ");
-    Serial.println(currentRotationIndex);
+    Serial.println(rotIdx);
     prefs.end();
     Serial.print("Setup: Provisioned = ");
     Serial.println(prv);
   } else {
     Serial.println("W: Prefs RO Fail for provisioned/blockchain check.");
-    currentRotationIndex = 0;
-    selectedBlockchainIndex = 0;
+    rotIdx = 0;
+    blkIdx = 0;
   }
+  provisioned = prv;
+  loadedMnemonic = loadedM;
+  currentRotationIndex = rotIdx;
+  selectedBlockchainIndex = blkIdx;
   currentState = STATE_BLOCKCHAIN_SELECTION;
   Serial.println("Setup: Init state -> BLOCKCHAIN_SELECTION.");
   Serial.print("Setup: Exit Heap: ");
@@ -911,6 +1081,7 @@ void loop() {
     firstLoop = false;
   }
   readButtons();
+  bool pressed = ts.tirqTouched() && ts.touched();
   switch (currentState) {
     case STATE_BLOCKCHAIN_SELECTION:
       if (redrawScreen) {
@@ -929,42 +1100,191 @@ void loop() {
           } else {
             Serial.println("W: Failed to save blockchain index");
           }
-          bool isPrv = prefs.getBool(PROVISIONED_KEY, false);
-          if (isPrv && prefs.isKey(MNEMONIC_KEY)) {
-            loadedMnemonic = prefs.getString(MNEMONIC_KEY, "");
-            if (loadedMnemonic.length() > 10) {
-              Serial.println("L: Mnemonic loaded, proceeding to PIN entry");
-              currentState = STATE_PASSWORD_ENTRY;
-              currentDigitIndex = 0;
-              currentDigitValue = 0;
-              passwordConfirmed = false;
-              memset(password, '_', PIN_LENGTH);
-              password[PIN_LENGTH] = '\0';
-            } else {
-              errorMessage = "Invalid Mnemonic Loaded";
-              displayErrorScreen(errorMessage);
-              currentState = STATE_ERROR;
-            }
-          } else {
-            // Generate new mnemonic
-            uint8_t ent[16];
-            esp_fill_random(ent, 16);
-            generatedMnemonic = generateMnemonicFromEntropy(ent, 16);
-            if (generatedMnemonic.length() > 0) {
-              Serial.println("L: New mnemonic generated: " + generatedMnemonic);
-              currentState = STATE_SHOW_GENERATED_MNEMONIC;
-            } else {
-              errorMessage = "Key Gen Fail!";
-              displayErrorScreen(errorMessage);
-              currentState = STATE_ERROR;
-            }
-          }
           prefs.end();
         } else {
-          Serial.println("W: Prefs RW Fail for blockchain/provision check");
+          Serial.println("W: Prefs RW Fail for blockchain save");
+        }
+        if (prefs.begin(PREFS_NAMESPACE, true)) {
+          provisioned = prefs.getBool(PROVISIONED_KEY, false);
+          loadedMnemonic = provisioned ? prefs.getString(MNEMONIC_KEY, "") : "";
+          prefs.end();
+          if (provisioned && loadedMnemonic.length() > 10) {
+            Serial.println("L: Mnemonic loaded, proceeding to PIN entry");
+            currentState = STATE_PASSWORD_ENTRY;
+            currentDigitIndex = 0;
+            currentDigitValue = 0;
+            passwordConfirmed = false;
+            memset(password, '_', PIN_LENGTH);
+            password[PIN_LENGTH] = '\0';
+          } else {
+            Serial.println("L: Not provisioned, go to wallet type selection");
+            currentState = STATE_WALLET_TYPE_SELECTION;
+            newWalletMode = true;
+          }
+        } else {
+          Serial.println("W: Prefs RO Fail for provisioned/mnemonic check");
           errorMessage = "Storage Access Error";
           displayErrorScreen(errorMessage);
           currentState = STATE_ERROR;
+        }
+      }
+      break;
+
+    case STATE_WALLET_TYPE_SELECTION:
+      if (redrawScreen) {
+        showWalletTypeSelectionScreen();
+        Serial.println("L: Wallet Type Selection Screen Redrawn");
+      }
+      if (buttonLeftTriggered) {
+        newWalletMode = !newWalletMode;
+        Serial.printf("L: Wallet mode cycled to %s\n", newWalletMode ? "New" : "Import");
+        showWalletTypeSelectionScreen();
+      } else if (buttonRightTriggered) {
+        Serial.printf("L: Wallet mode selected: %s\n", newWalletMode ? "New" : "Import");
+        if (newWalletMode) {
+          // Generate new mnemonic
+          uint8_t ent[16];
+          esp_fill_random(ent, 16);
+          generatedMnemonic = generateMnemonicFromEntropy(ent, 16);
+          if (generatedMnemonic.length() > 0) {
+            Serial.println("L: New mnemonic generated: " + generatedMnemonic);
+            currentState = STATE_SHOW_GENERATED_MNEMONIC;
+          } else {
+            errorMessage = "Key Gen Fail!";
+            displayErrorScreen(errorMessage);
+            currentState = STATE_ERROR;
+          }
+        } else {
+          // Import mode
+          Serial.println("L: Entering mnemonic import mode");
+          currentState = STATE_MNEMONIC_IMPORT;
+          memset(wordIndices, 0, sizeof(wordIndices));
+          strcpy(currentWordBuffer, "");
+          currentWordIndex = 0;
+          cursorPos = 0;
+        }
+      }
+      break;
+
+        case STATE_MNEMONIC_IMPORT:
+      if (redrawScreen) {
+        showMnemonicImportScreen();
+        Serial.println("L: Mnemonic Import Screen Redrawn");
+      }
+      // Handle hold for backspace
+      if (pressed && touchIsBeingHeld && (millis() - touchHoldStartTime > 1000)) {
+        int len = strlen(currentWordBuffer);
+        if (len > 0 && cursorPos > 0) {
+          // Remove character before cursor
+          for (int i = cursorPos - 1; i < len; i++) {
+            currentWordBuffer[i] = currentWordBuffer[i + 1];
+          }
+          cursorPos--;
+          Serial.println("L: Backspace - Current buffer: " + String(currentWordBuffer));
+          showMnemonicImportScreen();
+          touchHoldStartTime = millis(); // Reset for multiple backspaces
+          delay(200); // Debounce
+        }
+      }
+      if (buttonLeftTriggered) {
+        // Cycle to next valid letter at cursor position
+        String prefix = String(currentWordBuffer).substring(0, cursorPos);
+        String possibles = getPossibleNextLetters(prefix.c_str(), cursorPos);
+        int len = strlen(currentWordBuffer);
+        char currentChar = (cursorPos < len) ? currentWordBuffer[cursorPos] : ' ';
+        int currentIdx = possibles.indexOf(currentChar);
+        if (currentIdx < 0) currentIdx = -1; // If invalid, start from beginning
+        char nextChar;
+        if (possibles.length() == 0) {
+          // No valid continuations, stay or reset
+          nextChar = currentChar;
+        } else {
+          int nextIdx = (currentIdx + 1) % possibles.length();
+          nextChar = possibles.charAt(nextIdx);
+        }
+        if (cursorPos < len) {
+          currentWordBuffer[cursorPos] = nextChar;
+        } else {
+          // Append if at end
+          currentWordBuffer[cursorPos] = nextChar;
+          currentWordBuffer[cursorPos + 1] = '\0';
+        }
+        Serial.printf("L: Valid letter cycled at pos %d (word %d): %s (possibles: %s)\n", 
+                      cursorPos, currentWordIndex, currentWordBuffer, possibles.c_str());
+        showMnemonicImportScreen();
+      } else if (buttonRightTriggered) {
+        int len = strlen(currentWordBuffer);
+        if (cursorPos < len) {
+          // Advance cursor
+          cursorPos++;
+          showMnemonicImportScreen();
+        } else {
+          // At end
+          String firstMatch = getFirstMatchingWord(currentWordBuffer);
+          uint16_t idx;
+          if (len >= 3 && isValidWord(currentWordBuffer, idx)) {
+            wordIndices[currentWordIndex] = idx;
+            Serial.printf("L: Word %d confirmed: %s (index %d)\n", currentWordIndex + 1, currentWordBuffer, idx);
+            currentWordIndex++;
+            if (currentWordIndex >= NUM_WORDS) {
+              // Build and validate mnemonic
+              String m = "";
+              for (int i = 0; i < NUM_WORDS; i++) {
+                m += String(wordlist[wordIndices[i]]);
+                if (i < NUM_WORDS - 1) m += " ";
+              }
+              Serial.println("L: Imported mnemonic: " + m);
+              if (validateMnemonic(m)) {
+                loadedMnemonic = m;
+                bool saveOk = false;
+                if (prefs.begin(PREFS_NAMESPACE, false)) {
+                  if (prefs.putString(MNEMONIC_KEY, m.c_str()) && prefs.putBool(PROVISIONED_KEY, true)) {
+                    saveOk = true;
+                    provisioned = true;
+                  }
+                  prefs.end();
+                }
+                if (saveOk) {
+                  Serial.println("L: Imported mnemonic saved, proceeding to PIN entry");
+                  currentState = STATE_PASSWORD_ENTRY;
+                  currentDigitIndex = 0;
+                  currentDigitValue = 0;
+                  passwordConfirmed = false;
+                  memset(password, '_', PIN_LENGTH);
+                  password[PIN_LENGTH] = '\0';
+                } else {
+                  errorMessage = "Save Failed!";
+                  displayErrorScreen(errorMessage);
+                  currentState = STATE_ERROR;
+                }
+              } else {
+                errorMessage = "Invalid Checksum!";
+                displayErrorScreen(errorMessage);
+                currentState = STATE_ERROR;
+                strcpy(currentWordBuffer, "");
+                cursorPos = 0;
+              }
+            } else {
+              strcpy(currentWordBuffer, "");
+              cursorPos = 0;
+              showMnemonicImportScreen();
+              Serial.printf("L: Word %d entered, now word %d\n", currentWordIndex, currentWordIndex + 1);
+            }
+          } else if (firstMatch == "None") {
+            // Invalid prefix
+            Serial.println("E: Invalid prefix: no matching word for '" + String(currentWordBuffer) + "'");
+            tft.fillScreen(TFT_RED);
+            tft.setTextColor(TFT_WHITE, TFT_RED);
+            tft.setTextDatum(MC_DATUM);
+            tft.setTextSize(2);
+            tft.drawString("Invalid Prefix!", tft.width() / 2, tft.height() / 2);
+            delay(1000);
+            showMnemonicImportScreen();
+          } else {
+            // Valid prefix but not ready to confirm (too short or incomplete)
+            Serial.println("L: Continue typing word (preview: " + firstMatch + ")");
+            showMnemonicImportScreen();
+          }
         }
       }
       break;
@@ -995,6 +1315,7 @@ void loop() {
         }
         if (sM && sF) {
           loadedMnemonic = generatedMnemonic;
+          provisioned = true;
           generatedMnemonic = "";
           Serial.println("L: Saved OK -> Enter PIN to proceed to wallet");
           currentState = STATE_PASSWORD_ENTRY;
@@ -1364,12 +1685,15 @@ void loop() {
     case STATE_ERROR:
       if (buttonLeftTriggered) {
         Serial.println("L: Error Acknowledged.");
-        currentState = STATE_PASSWORD_ENTRY;
+        currentState = provisioned ? STATE_PASSWORD_ENTRY : STATE_WALLET_TYPE_SELECTION;
+        if (!provisioned) newWalletMode = false;
         currentDigitIndex = 0;
         currentDigitValue = 0;
         passwordConfirmed = false;
         memset(password, '_', PIN_LENGTH);
         password[PIN_LENGTH] = '\0';
+        cursorPos = 0;
+        strcpy(currentWordBuffer, "");
       }
       break;
 
@@ -1377,12 +1701,41 @@ void loop() {
       Serial.printf("E: Unknown State %d\n", currentState);
       errorMessage = "Unknown State Error";
       displayErrorScreen(errorMessage);
-      currentState = STATE_PASSWORD_ENTRY;
+      currentState = provisioned ? STATE_PASSWORD_ENTRY : STATE_WALLET_TYPE_SELECTION;
+      if (!provisioned) newWalletMode = false;
       currentDigitIndex = 0;
       currentDigitValue = 0;
       passwordConfirmed = false;
       memset(password, '_', PIN_LENGTH);
       password[PIN_LENGTH] = '\0';
+      cursorPos = 0;
+      strcpy(currentWordBuffer, "");
       break;
   }
+}
+
+String getPossibleNextLetters(const char* buffer, int prefixLen) {
+  bool hasLetter[26] = {false};
+  for (int i = 0; i < 2048; i++) {
+    if (strncmp(wordlist[i], buffer, prefixLen) == 0 && strlen(wordlist[i]) > prefixLen) {
+      char nextChar = wordlist[i][prefixLen];
+      int idx = getLetterIndex(nextChar);
+      if (idx >= 0) hasLetter[idx] = true;
+    }
+  }
+  String possibles = "";
+  for (int j = 0; j < 26; j++) {
+    if (hasLetter[j]) possibles += alphabet[j];
+  }
+  return possibles;
+}
+
+String getFirstMatchingWord(const char* prefix) {
+  int prefixLen = strlen(prefix);
+  for (int i = 0; i < 2048; i++) {
+    if (strncmp(wordlist[i], prefix, prefixLen) == 0) {
+      return String(wordlist[i]);
+    }
+  }
+  return "None";
 }

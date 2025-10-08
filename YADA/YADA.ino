@@ -1039,8 +1039,8 @@ void setup() {
     currentDigitIndex = 0;
     currentDigitValue = 0;
     passwordConfirmed = false;
-    currentState = STATE_PASSWORD_ENTRY;
-    Serial.println("Setup: Init state -> PASSWORD_ENTRY.");
+    currentState = STATE_WALLET_TYPE_SELECTION; // Start with wallet type selection
+    Serial.println("Setup: Init state -> WALLET_TYPE_SELECTION.");
     currentJumpDigitIndex = 0;
     currentJumpDigitValue = 0;
     Serial.println("Setup: Pwd State OK.");
@@ -1064,11 +1064,6 @@ void setup() {
         }
     } else {
         Serial.println("Setup: Prefs RW OK.");
-        prefs.end();
-    }
-
-    // Load cached key and associated metadata
-    if (prefs.begin(PREFS_NAMESPACE, true)) {
         provisioned = prefs.getBool(PROVISIONED_KEY, false);
         loadedMnemonic = prefs.getString(MNEMONIC_KEY, "");
         currentRotationIndex = prefs.getInt(ROTATION_INDEX_KEY, 0);
@@ -1076,8 +1071,7 @@ void setup() {
         if (selectedBlockchainIndex < 0 || selectedBlockchainIndex >= NUM_BLOCKCHAINS) {
             selectedBlockchainIndex = 0;
         }
-
-        // Load cachedParentKey
+        // Load cached key and associated metadata
         String cachedKeyHex = prefs.getString("CACHED_KEY", "");
         String cachedChaincodeHex = prefs.getString(CHAINCODE_KEY, "");
         int storedRotationIndex = prefs.getInt(ROTATION_INDEX_KEY, -1);
@@ -1099,7 +1093,6 @@ void setup() {
             cachedParentKey = HDPrivateKey();
             Serial.println("L: No valid cached key found");
         }
-
         // Load cachedPrevParentKey
         String cachedPrevKeyHex = prefs.getString("CACHED_PREV_KEY", "");
         String cachedPrevChaincodeHex = prefs.getString("CACHED_PREV_CHAINCODE", "");
@@ -1123,12 +1116,15 @@ void setup() {
             Serial.println("L: No valid cached prev key found");
         }
         prefs.end();
+    }
+
+    // Check provisioning status
+    if (provisioned && loadedMnemonic.length() > 10) {
+        Serial.println("L: Device provisioned, skipping to Password Entry");
+        currentState = STATE_PASSWORD_ENTRY;
     } else {
-        Serial.println("W: Prefs RO Fail for provisioned/blockchain check");
-        cachedRotationIndex = -1;
-        cachedParentKey = HDPrivateKey();
-        cachedPrevRotationIndex = -1;
-        cachedPrevParentKey = HDPrivateKey();
+        Serial.println("L: Device not provisioned, starting with Wallet Type Selection");
+        currentState = STATE_WALLET_TYPE_SELECTION;
     }
 
     Serial.print("Setup: Exit Heap: ");
@@ -1141,7 +1137,7 @@ void setup() {
 // ========================================
 void loop() {
   static bool firstLoop = true;
-  static AppState lastState = STATE_PASSWORD_ENTRY; // Reflects initial state
+  static AppState lastState = STATE_WALLET_TYPE_SELECTION; // Reflects new initial state
   bool redrawScreen = false;
   if (currentState != lastState) {
     redrawScreen = true;
@@ -1159,77 +1155,6 @@ void loop() {
   readButtons();
   bool pressed = ts.tirqTouched() && ts.touched();
   switch (currentState) {
-    case STATE_PASSWORD_ENTRY:
-      if (redrawScreen) {
-          showPasswordEntryScreen();
-          Serial.println("L: Password Entry Screen Redrawn");
-      }
-      if (buttonLeftTriggered) {
-          currentDigitValue = (currentDigitValue + 1) % 10;
-          showPasswordEntryScreen();
-          Serial.printf("L: Digit cycled to %d at index %d\n", currentDigitValue, currentDigitIndex);
-      } else if (buttonRightTriggered) {
-          Serial.printf("L: Right Button (Next/OK) Pressed at digit index %d\n", currentDigitIndex);
-          password[currentDigitIndex] = currentDigitValue + '0';
-          currentDigitIndex++;
-          currentDigitValue = 0;
-          if (currentDigitIndex >= PIN_LENGTH) {
-            password[PIN_LENGTH] = '\0';
-            Serial.print("L: Full PIN Entered: ");
-            Serial.println(password);
-            passwordConfirmed = true;
-            cachedRotationIndex = -1; // Invalidate cache
-            cachedParentKey = HDPrivateKey(); // Clear cached key
-            hdWalletKey = HDPrivateKey(); // Clear base key
-            currentState = STATE_BLOCKCHAIN_SELECTION;
-            selectedBlockchainIndex = 0;
-          } else {
-              showPasswordEntryScreen();
-              Serial.printf("L: Digit entered, index now %d\n", currentDigitIndex);
-          }
-      }
-      break;
-
-    case STATE_BLOCKCHAIN_SELECTION:
-      if (redrawScreen) {
-          showBlockchainSelectionScreen();
-          Serial.println("L: Blockchain Selection Screen Redrawn");
-      }
-      if (buttonLeftTriggered) {
-          selectedBlockchainIndex = (selectedBlockchainIndex + 1) % NUM_BLOCKCHAINS;
-          Serial.printf("L: Blockchain cycled to %s (index %d)\n", blockchains[selectedBlockchainIndex].name, selectedBlockchainIndex);
-          showBlockchainSelectionScreen();
-      } else if (buttonRightTriggered) {
-          Serial.printf("L: Blockchain selected: %s (index %d)\n", blockchains[selectedBlockchainIndex].name, selectedBlockchainIndex);
-          if (prefs.begin(PREFS_NAMESPACE, false)) {
-              prefs.putInt(BLOCKCHAIN_INDEX_KEY, selectedBlockchainIndex);
-              prefs.end();
-          }
-          cachedRotationIndex = -1; // Invalidate cache
-          cachedParentKey = HDPrivateKey(); // Clear cached key
-          hdWalletKey = HDPrivateKey(); // Clear base key
-          if (prefs.begin(PREFS_NAMESPACE, true)) {
-              provisioned = prefs.getBool(PROVISIONED_KEY, false);
-              loadedMnemonic = provisioned ? prefs.getString(MNEMONIC_KEY, "") : "";
-              prefs.end();
-              if (provisioned && loadedMnemonic.length() > 10 && passwordConfirmed) {
-                  Serial.println("L: Mnemonic loaded, proceeding to Wallet View");
-                  currentState = STATE_WALLET_VIEW;
-                  currentRotationIndex = 0;
-              } else {
-                  Serial.println("L: Not provisioned or no valid mnemonic, go to wallet type selection");
-                  currentState = STATE_WALLET_TYPE_SELECTION;
-                  newWalletMode = true;
-              }
-          } else {
-              Serial.println("W: Prefs RO Fail for provisioned/mnemonic check");
-              errorMessage = "Storage Access Error";
-              displayErrorScreen(errorMessage);
-              currentState = STATE_ERROR;
-          }
-      }
-      break;
-
     case STATE_WALLET_TYPE_SELECTION:
       if (redrawScreen) {
         showWalletTypeSelectionScreen();
@@ -1262,6 +1187,41 @@ void loop() {
           strcpy(currentWordBuffer, "");
           currentWordIndex = 0;
           cursorPos = 0;
+        }
+      }
+      break;
+
+    case STATE_SHOW_GENERATED_MNEMONIC:
+      if (redrawScreen) displayGeneratedMnemonicScreen(generatedMnemonic);
+      if (buttonRightTriggered) {
+        Serial.println("L: Mnem Confirm.");
+        bool sM = false, sF = false;
+        if (prefs.begin(PREFS_NAMESPACE, false)) {
+          if (prefs.putString(MNEMONIC_KEY, generatedMnemonic.c_str())) {
+            sM = true;
+          }
+          if (sM && prefs.putBool(PROVISIONED_KEY, true)) {
+            sF = true;
+          }
+          prefs.end();
+        } else {
+          errorMessage = "Store Write Err!";
+          displayErrorScreen(errorMessage);
+          break;
+        }
+        if (sM && sF) {
+          loadedMnemonic = generatedMnemonic;
+          provisioned = true;
+          generatedMnemonic = "";
+          Serial.println("L: Saved OK -> Proceeding to Password Entry");
+          currentState = STATE_PASSWORD_ENTRY;
+          currentDigitIndex = 0;
+          currentDigitValue = 0;
+          memset(password, '_', PIN_LENGTH);
+          password[PIN_LENGTH] = '\0';
+        } else {
+          errorMessage = "Key Save Fail!";
+          displayErrorScreen(errorMessage);
         }
       }
       break;
@@ -1362,9 +1322,12 @@ void loop() {
                   prefs.end();
                 }
                 if (saveOk) {
-                  Serial.println("L: Imported mnemonic saved, proceeding to Wallet View");
-                  currentState = STATE_WALLET_VIEW;
-                  currentRotationIndex = 0; // Reset to initial rotation index
+                  Serial.println("L: Imported mnemonic saved, proceeding to Password Entry");
+                  currentState = STATE_PASSWORD_ENTRY;
+                  currentDigitIndex = 0;
+                  currentDigitValue = 0;
+                  memset(password, '_', PIN_LENGTH);
+                  password[PIN_LENGTH] = '\0';
                 } else {
                   errorMessage = "Save Failed!";
                   displayErrorScreen(errorMessage);
@@ -1411,41 +1374,62 @@ void loop() {
       }
       break;
 
-    case STATE_INITIALIZING:
-      Serial.println("W: Init Loop reached. Should not happen.");
-      errorMessage = "Init Loop Error";
-      displayErrorScreen(errorMessage);
+    case STATE_PASSWORD_ENTRY:
+      if (redrawScreen) {
+          showPasswordEntryScreen();
+          Serial.println("L: Password Entry Screen Redrawn");
+      }
+      if (buttonLeftTriggered) {
+          currentDigitValue = (currentDigitValue + 1) % 10;
+          showPasswordEntryScreen();
+          Serial.printf("L: Digit cycled to %d at index %d\n", currentDigitValue, currentDigitIndex);
+      } else if (buttonRightTriggered) {
+          Serial.printf("L: Right Button (Next/OK) Pressed at digit index %d\n", currentDigitIndex);
+          password[currentDigitIndex] = currentDigitValue + '0';
+          currentDigitIndex++;
+          currentDigitValue = 0;
+          if (currentDigitIndex >= PIN_LENGTH) {
+            password[PIN_LENGTH] = '\0';
+            Serial.print("L: Full PIN Entered: ");
+            Serial.println(password);
+            passwordConfirmed = true;
+            cachedRotationIndex = -1; // Invalidate cache
+            cachedParentKey = HDPrivateKey(); // Clear cached key
+            hdWalletKey = HDPrivateKey(); // Clear base key
+            currentState = STATE_BLOCKCHAIN_SELECTION;
+            selectedBlockchainIndex = 0;
+          } else {
+              showPasswordEntryScreen();
+              Serial.printf("L: Digit entered, index now %d\n", currentDigitIndex);
+          }
+      }
       break;
 
-    case STATE_SHOW_GENERATED_MNEMONIC:
-      if (redrawScreen) displayGeneratedMnemonicScreen(generatedMnemonic);
-      if (buttonRightTriggered) {
-        Serial.println("L: Mnem Confirm.");
-        bool sM = false, sF = false;
-        if (prefs.begin(PREFS_NAMESPACE, false)) {
-          if (prefs.putString(MNEMONIC_KEY, generatedMnemonic.c_str())) {
-            sM = true;
+    case STATE_BLOCKCHAIN_SELECTION:
+      if (redrawScreen) {
+          showBlockchainSelectionScreen();
+          Serial.println("L: Blockchain Selection Screen Redrawn");
+      }
+      if (buttonLeftTriggered) {
+          selectedBlockchainIndex = (selectedBlockchainIndex + 1) % NUM_BLOCKCHAINS;
+          Serial.printf("L: Blockchain cycled to %s (index %d)\n", blockchains[selectedBlockchainIndex].name, selectedBlockchainIndex);
+          showBlockchainSelectionScreen();
+      } else if (buttonRightTriggered) {
+          Serial.printf("L: Blockchain selected: %s (index %d)\n", blockchains[selectedBlockchainIndex].name, selectedBlockchainIndex);
+          if (prefs.begin(PREFS_NAMESPACE, false)) {
+              prefs.putInt(BLOCKCHAIN_INDEX_KEY, selectedBlockchainIndex);
+              prefs.end();
           }
-          if (sM && prefs.putBool(PROVISIONED_KEY, true)) {
-            sF = true;
+          if (provisioned && loadedMnemonic.length() > 10 && passwordConfirmed) {
+              Serial.println("L: Mnemonic loaded and PIN confirmed, proceeding to Wallet View");
+              currentState = STATE_WALLET_VIEW;
+              currentRotationIndex = 0;
+          } else {
+              Serial.println("W: Provisioned or mnemonic missing after blockchain selection");
+              errorMessage = "Wallet Setup Error";
+              displayErrorScreen(errorMessage);
+              currentState = STATE_ERROR;
           }
-          prefs.end();
-        } else {
-          errorMessage = "Store Write Err!";
-          displayErrorScreen(errorMessage);
-          break;
-        }
-        if (sM && sF) {
-          loadedMnemonic = generatedMnemonic;
-          provisioned = true;
-          generatedMnemonic = "";
-          Serial.println("L: Saved OK -> Proceeding to Wallet View");
-          currentState = STATE_WALLET_VIEW;
-          currentRotationIndex = 0; // Reset to initial rotation index
-        } else {
-          errorMessage = "Key Save Fail!";
-          displayErrorScreen(errorMessage);
-        }
       }
       break;
 
@@ -1839,7 +1823,7 @@ void loop() {
     case STATE_ERROR:
       if (buttonLeftTriggered) {
         Serial.println("L: Error Acknowledged.");
-        currentState = STATE_PASSWORD_ENTRY; // Always return to PIN entry
+        currentState = STATE_WALLET_TYPE_SELECTION; // Return to wallet type selection
         currentDigitIndex = 0;
         currentDigitValue = 0;
         passwordConfirmed = false;
@@ -1854,7 +1838,7 @@ void loop() {
       Serial.printf("E: Unknown State %d\n", currentState);
       errorMessage = "Unknown State Error";
       displayErrorScreen(errorMessage);
-      currentState = STATE_PASSWORD_ENTRY; // Revert to PIN entry on error
+      currentState = STATE_WALLET_TYPE_SELECTION; // Revert to wallet type selection on error
       currentDigitIndex = 0;
       currentDigitValue = 0;
       passwordConfirmed = false;

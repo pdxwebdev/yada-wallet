@@ -82,6 +82,7 @@ HDPrivateKey cachedParentKey; // Cache the parent key at currentRotationIndex
 int cachedRotationIndex = -1; // Track the rotation index of cachedParentKey
 HDPrivateKey cachedPrevParentKey; // Cache the key for rotation n-1
 int cachedPrevRotationIndex = -1; // Track the rotation index of cachedPrevParentKey
+HDPrivateKey prevPrevParentKey; // Cache the key for rotation n-1
 
 // --- Preferences ---
 Preferences prefs;
@@ -1536,12 +1537,16 @@ void loop() {
                     computeFingerprint(hdWalletKey.publicKey(), parentFingerprint);
                     for (int r = 0; r < currentRotationIndex; r++) {
                         cachedParentKey = cachedParentKey.derive(rotationPathSegment.c_str());
+                        if (r == currentRotationIndex - 2) {
+                          prevPrevParentKey = cachedParentKey;
+                        }
                         depth += 3;
                         computeFingerprint(cachedParentKey.publicKey(), parentFingerprint);
                     }
                 } else if (currentRotationIndex == cachedRotationIndex + 1) {
                     depth = cachedParentKey.depth;
                     computeFingerprint(cachedParentKey.publicKey(), parentFingerprint);
+                    prevPrevParentKey = cachedParentKey;
                     cachedParentKey = cachedParentKey.derive(rotationPathSegment.c_str());
                     depth += 3;
                     computeFingerprint(cachedParentKey.publicKey(), parentFingerprint);
@@ -1562,7 +1567,8 @@ void loop() {
                 }
                 // Update previous key cache for next iteration
                 if (currentRotationIndex > 0) {
-                    cachedPrevParentKey = (currentRotationIndex == cachedRotationIndex + 1 && cachedPrevRotationIndex == cachedRotationIndex - 1) ? cachedPrevParentKey : cachedParentKey;
+                    Serial.printf("L: %d, %d, %d\n", currentRotationIndex, cachedRotationIndex, cachedPrevRotationIndex);
+                    cachedPrevParentKey = (currentRotationIndex == cachedRotationIndex + 1 && cachedPrevRotationIndex == cachedRotationIndex - 1) ? cachedParentKey : prevPrevParentKey;
                     cachedPrevRotationIndex = currentRotationIndex - 1;
                 } else {
                     cachedPrevParentKey = HDPrivateKey();
@@ -1596,18 +1602,17 @@ void loop() {
 
             // Derive previous key (n-1) using cache
             String public_key_hash_prev = "";
-
             if (currentRotationIndex > 0) {
                 unsigned long prevStartTime = millis();
                 HDPrivateKey prevParentKey;
                 if (cachedPrevRotationIndex == currentRotationIndex - 1 && cachedPrevParentKey.isValid()) {
                     Serial.printf("L: Using cached prev key for rotation %d\n", cachedPrevRotationIndex);
-                    prevParentKey = cachedPrevParentKey;
+                    prevParentKey = prevPrevParentKey;
                 } else {
                     Serial.printf("L: Prev cache miss (cached: %d, target: %d), deriving prev key\n", cachedPrevRotationIndex, currentRotationIndex - 1);
-                    prevParentKey = (currentRotationIndex == cachedRotationIndex + 1 && cachedPrevParentKey.isValid() && cachedPrevRotationIndex == currentRotationIndex - 2) ? cachedPrevParentKey : hdWalletKey;
+                    prevParentKey = (cachedRotationIndex == currentRotationIndex && cachedParentKey.isValid()) ? cachedParentKey : hdWalletKey;
                     depth = prevParentKey.depth;
-                    int startIndex = (prevParentKey == hdWalletKey) ? 0 : currentRotationIndex - 2;
+                    int startIndex = (prevParentKey == hdWalletKey) ? 0 : currentRotationIndex - 1;
                     for (int r = startIndex; r < currentRotationIndex - 1; r++) {
                         unsigned long derivStart = millis();
                         prevParentKey = prevParentKey.derive(rotationPathSegment.c_str());

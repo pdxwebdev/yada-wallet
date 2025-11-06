@@ -137,7 +137,7 @@ int currentJumpDigitValue = 0;
 
 // --- Password Entry State ---
 const uint32_t MODULO_2_31 = 2147483647; // 2^31
-const int PIN_LENGTH = 6;
+const int PIN_LENGTH = 10;
 char password[PIN_LENGTH + 1];
 int currentDigitIndex = 0;
 enum CharsetMode { MODE_NUMBERS, MODE_LOWER, MODE_UPPER, MODE_SPECIAL, NUM_MODES };
@@ -1475,7 +1475,8 @@ void loop() {
       }
       if (buttonConfirmTriggered) {
         password[currentDigitIndex] = charsetModes[currentCharsetMode][currentCharIndex];
-        password[PIN_LENGTH] = '\0';
+        int effectiveLength = currentDigitIndex + 1;
+        password[effectiveLength] = '\0';
         // Serial.print("L: Full Password Confirmed via OK button: ");
         // Serial.println(password);
         passwordConfirmed = true;
@@ -1502,17 +1503,16 @@ void loop() {
           // Serial.printf("L: Right Button (Next) Pressed at digit index %d\n", currentDigitIndex);
           password[currentDigitIndex] = charsetModes[currentCharsetMode][currentCharIndex];
           currentDigitIndex++;
-          currentCharIndex = 0;
           if (currentDigitIndex >= PIN_LENGTH) {
-            password[PIN_LENGTH] = '\0';
-            // Serial.print("L: Full Password Entered via Next button: ");
-            // Serial.println(password);
-            passwordConfirmed = true;
-            cachedRotationIndex = -1; // Invalidate cache
-            cachedParentKey = HDPrivateKey(); // Clear cached key
-            hdWalletKey = HDPrivateKey(); // Clear base key
-            currentState = STATE_BLOCKCHAIN_SELECTION;
-            selectedBlockchainIndex = 0;
+              password[PIN_LENGTH] = '\0';
+              // Serial.print("L: Full Password Entered via Next button: ");
+              // Serial.println(password);
+              passwordConfirmed = true;
+              cachedRotationIndex = -1; // Invalidate cache
+              cachedParentKey = HDPrivateKey(); // Clear cached key
+              hdWalletKey = HDPrivateKey(); // Clear base key
+              currentState = STATE_BLOCKCHAIN_SELECTION;
+              selectedBlockchainIndex = 0;
           } else {
               showPasswordEntryScreen();
               // Serial.printf("L: Char entered via Next, index now %d\n", currentDigitIndex);

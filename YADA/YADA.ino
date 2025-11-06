@@ -138,7 +138,9 @@ const uint32_t MODULO_2_31 = 2147483647; // 2^31
 const int PIN_LENGTH = 6;
 char password[PIN_LENGTH + 1];
 int currentDigitIndex = 0;
-int currentDigitValue = 0;
+const char* CHARSET = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()<>?:\"';[]\\{}|`~_+-=";
+const int CHARSET_SIZE = 91;
+int currentCharIndex = 0;
 bool passwordConfirmed = false;
 
 // --- Mnemonic Import State ---
@@ -169,6 +171,13 @@ char getNextLetter(char c) {
   if (idx < 0) return 'a';
   idx = (idx + 1) % 26;
   return alphabet[idx];
+}
+
+int getCharsetIndex(char c) {
+  for (int i = 0; i < CHARSET_SIZE; i++) {
+    if (CHARSET[i] == c) return i;
+  }
+  return 0; // fallback
 }
 
 bool isValidWord(const char* wordStr, uint16_t& index) {
@@ -469,7 +478,7 @@ HDPrivateKey deriveHardened(HDPrivateKey root, uint32_t index) {
     // Serial.println(errorMessage);
     passwordConfirmed = false;
     currentDigitIndex = 0;
-    currentDigitValue = 0;
+    currentCharIndex = 52;
     memset(password, '_', PIN_LENGTH);
     password[PIN_LENGTH] = '\0';
   }
@@ -688,7 +697,7 @@ void showPasswordEntryScreen() {
   tft.setTextColor(TFT_WHITE, TFT_DARKCYAN);
   tft.setTextDatum(MC_DATUM);
   tft.setTextSize(2);
-  tft.drawString("Enter Wallet PIN", tft.width() / 2, 30);
+  tft.drawString("Enter Wallet Password", tft.width() / 2, 30);
   int digitBoxSize = 25;
   int spacing = 8;
   int totalW = PIN_LENGTH * digitBoxSize + (PIN_LENGTH - 1) * spacing;
@@ -704,7 +713,7 @@ void showPasswordEntryScreen() {
     if (i < currentDigitIndex) {
       displayChar = '*';
     } else if (i == currentDigitIndex) {
-      displayChar = currentDigitValue + '0';
+      displayChar = CHARSET[currentCharIndex];
     } else {
       displayChar = '_';
     }
@@ -1094,7 +1103,7 @@ void setup() {
     memset(password, '_', PIN_LENGTH);
     password[PIN_LENGTH] = '\0';
     currentDigitIndex = 0;
-    currentDigitValue = 0;
+    currentCharIndex = 52;
     passwordConfirmed = false;
     currentState = STATE_WALLET_TYPE_SELECTION; // Start with wallet type selection
     // Serial.println("Setup: Init state -> WALLET_TYPE_SELECTION.");
@@ -1276,7 +1285,7 @@ void loop() {
           // Serial.println("L: Saved OK -> Proceeding to Password Entry");
           currentState = STATE_PASSWORD_ENTRY;
           currentDigitIndex = 0;
-          currentDigitValue = 0;
+          currentCharIndex = 52;
           memset(password, '_', PIN_LENGTH);
           password[PIN_LENGTH] = '\0';
         } else {
@@ -1385,7 +1394,7 @@ void loop() {
                   // Serial.println("L: Imported mnemonic saved, proceeding to Password Entry");
                   currentState = STATE_PASSWORD_ENTRY;
                   currentDigitIndex = 0;
-                  currentDigitValue = 0;
+                  currentCharIndex = 52;
                   memset(password, '_', PIN_LENGTH);
                   password[PIN_LENGTH] = '\0';
                 } else {
@@ -1440,9 +1449,9 @@ void loop() {
           // Serial.println("L: Password Entry Screen Redrawn");
       }
       if (buttonConfirmTriggered) {
-        password[currentDigitIndex] = currentDigitValue + '0';
-        password[currentDigitIndex+1] = '\0';
-        // Serial.print("L: Full PIN Confirmed via OK button: ");
+        password[currentDigitIndex] = CHARSET[currentCharIndex];
+        password[PIN_LENGTH] = '\0';
+        // Serial.print("L: Full Password Confirmed via OK button: ");
         // Serial.println(password);
         passwordConfirmed = true;
         cachedRotationIndex = -1;
@@ -1451,21 +1460,21 @@ void loop() {
         currentState = STATE_BLOCKCHAIN_SELECTION;
         selectedBlockchainIndex = 0;
       } else if (buttonDecrementTriggered) {
-          currentDigitValue = (currentDigitValue - 1 + 10) % 10;
+          currentCharIndex = (currentCharIndex + CHARSET_SIZE - 1) % CHARSET_SIZE;
           showPasswordEntryScreen();
-          // Serial.printf("L: Digit decremented to %d at index %d\n", currentDigitValue, currentDigitIndex);
+          // Serial.printf("L: Char decremented to %c at index %d\n", CHARSET[currentCharIndex], currentDigitIndex);
       } else if (buttonIncrementTriggered) {
-          currentDigitValue = (currentDigitValue + 1) % 10;
+          currentCharIndex = (currentCharIndex + 1) % CHARSET_SIZE;
           showPasswordEntryScreen();
-          // Serial.printf("L: Digit incremented to %d at index %d\n", currentDigitValue, currentDigitIndex);
+          // Serial.printf("L: Char incremented to %c at index %d\n", CHARSET[currentCharIndex], currentDigitIndex);
       } else if (buttonRightTriggered) {
           // Serial.printf("L: Right Button (Next) Pressed at digit index %d\n", currentDigitIndex);
-          password[currentDigitIndex] = currentDigitValue + '0';
+          password[currentDigitIndex] = CHARSET[currentCharIndex];
           currentDigitIndex++;
-          currentDigitValue = 0;
+          currentCharIndex = 52;
           if (currentDigitIndex >= PIN_LENGTH) {
             password[PIN_LENGTH] = '\0';
-            // Serial.print("L: Full PIN Entered via Next button: ");
+            // Serial.print("L: Full Password Entered via Next button: ");
             // Serial.println(password);
             passwordConfirmed = true;
             cachedRotationIndex = -1; // Invalidate cache
@@ -1475,7 +1484,7 @@ void loop() {
             selectedBlockchainIndex = 0;
           } else {
               showPasswordEntryScreen();
-              // Serial.printf("L: Digit entered via Next, index now %d\n", currentDigitIndex);
+              // Serial.printf("L: Char entered via Next, index now %d\n", currentDigitIndex);
           }
       }
       break;
@@ -1556,7 +1565,7 @@ void loop() {
                     displayErrorScreen(errorMessage);
                     passwordConfirmed = false;
                     currentDigitIndex = 0;
-                    currentDigitValue = 0;
+                    currentCharIndex = 52;
                     memset(password, '_', PIN_LENGTH);
                     password[PIN_LENGTH] = '\0';
                     currentState = STATE_ERROR;
@@ -1568,7 +1577,7 @@ void loop() {
                     displayErrorScreen(errorMessage);
                     passwordConfirmed = false;
                     currentDigitIndex = 0;
-                    currentDigitValue = 0;
+                    currentCharIndex = 52;
                     memset(password, '_', PIN_LENGTH);
                     password[PIN_LENGTH] = '\0';
                     currentState = STATE_ERROR;
@@ -1581,7 +1590,7 @@ void loop() {
                     displayErrorScreen(errorMessage);
                     passwordConfirmed = false;
                     currentDigitIndex = 0;
-                    currentDigitValue = 0;
+                    currentCharIndex = 52;
                     memset(password, '_', PIN_LENGTH);
                     password[PIN_LENGTH] = '\0';
                     currentState = STATE_ERROR;
@@ -1642,7 +1651,7 @@ void loop() {
                 // Update previous key cache for next iteration
                 if (currentRotationIndex > 0) {
                     // Serial.printf("L: %d, %d, %d\n", currentRotationIndex, cachedRotationIndex, cachedPrevRotationIndex);
-                    cachedPrevParentKey = (currentRotationIndex == cachedRotationIndex + 1 && cachedPrevRotationIndex == cachedRotationIndex - 1) ? cachedParentKey : prevPrevParentKey;
+                    cachedPrevParentKey = (currentRotationIndex == cachedRotationIndex + 1 && cachedPrevRotationIndex == currentRotationIndex - 1) ? cachedParentKey : prevPrevParentKey;
                     cachedPrevRotationIndex = currentRotationIndex - 1;
                 } else {
                     cachedPrevParentKey = HDPrivateKey();
@@ -1904,7 +1913,7 @@ void loop() {
         // Serial.println("L: Error Acknowledged.");
         currentState = STATE_WALLET_TYPE_SELECTION; // Return to wallet type selection
         currentDigitIndex = 0;
-        currentDigitValue = 0;
+        currentCharIndex = 52;
         passwordConfirmed = false;
         memset(password, '_', PIN_LENGTH);
         password[PIN_LENGTH] = '\0';
@@ -1919,7 +1928,7 @@ void loop() {
       displayErrorScreen(errorMessage);
       currentState = STATE_WALLET_TYPE_SELECTION; // Revert to wallet type selection on error
       currentDigitIndex = 0;
-      currentDigitValue = 0;
+      currentCharIndex = 52;
       passwordConfirmed = false;
       memset(password, '_', PIN_LENGTH);
       password[PIN_LENGTH] = '\0';

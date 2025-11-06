@@ -44,6 +44,7 @@ TFT_eSPI_Button buttons[MAX_BUTTONS];
 #define SECRET_BUTTON_SIZE 35
 #define BUTTON_SPACING_X 10
 #define BUTTON_SPACING_Y 10
+#define SPLIT_BUTTON_W 50
 
 // Define button IDs (Based on HORIZONTAL layout + Secret + Jump)
 #define BTN_LEFT   0 // Cycle/Back/Prev/OK (Bottom Left drawn -> Touch X=65, Y=205)
@@ -55,6 +56,8 @@ TFT_eSPI_Button buttons[MAX_BUTTONS];
 #define BTN_CYCLE  0
 #define BTN_NEXT   1
 #define BTN_CONFIRM 1
+#define BTN_DECREMENT 4
+#define BTN_INCREMENT 5
 
 // --- Blockchain Configuration ---
 const Network BSCNetwork = {
@@ -97,6 +100,8 @@ bool buttonLeftTriggered = false;
 bool buttonRightTriggered = false;
 bool buttonSecretTriggered = false;
 bool buttonJumpTriggered = false;
+bool buttonDecrementTriggered = false;
+bool buttonIncrementTriggered = false;
 unsigned long touchHoldStartTime = 0;
 bool touchIsBeingHeld = false;
 
@@ -710,13 +715,19 @@ void showPasswordEntryScreen() {
   if (currentDigitIndex == PIN_LENGTH - 1) {
     strcpy(nextLabel, "OK");
   }
-  int leftButtonCenterX = 65;
-  int leftButtonCenterY = 205;
   int rightButtonCenterX = 255;
   int rightButtonCenterY = 205;
-  buttons[BTN_CYCLE].initButton(&tft, leftButtonCenterX, leftButtonCenterY, BUTTON_W, BUTTON_H, TFT_WHITE, TFT_BLUE, TFT_BLACK, "Cycle", 2);
   buttons[BTN_NEXT].initButton(&tft, rightButtonCenterX, rightButtonCenterY, BUTTON_W, BUTTON_H, TFT_WHITE, TFT_GREEN, TFT_BLACK, nextLabel, 2);
-  drawButtons(2);
+  buttons[BTN_NEXT].drawButton();
+
+  // Draw split buttons for decrement and increment
+  int decButtonCenterX = 40;
+  int incButtonCenterX = 90;
+  int buttonCenterY = 205;
+  buttons[BTN_DECREMENT].initButton(&tft, decButtonCenterX, buttonCenterY, SPLIT_BUTTON_W, BUTTON_H, TFT_WHITE, TFT_BLUE, TFT_BLACK, "<", 2);
+  buttons[BTN_DECREMENT].drawButton();
+  buttons[BTN_INCREMENT].initButton(&tft, incButtonCenterX, buttonCenterY, SPLIT_BUTTON_W, BUTTON_H, TFT_WHITE, TFT_BLUE, TFT_BLACK, ">", 2);
+  buttons[BTN_INCREMENT].drawButton();
 }
 
 
@@ -940,17 +951,23 @@ void readButtons() {
   static bool wasRightPressedState = false;
   static bool wasSecretPressedState = false;
   static bool wasJumpPressedState = false;
+  static bool wasDecPressedState = false;
+  static bool wasIncPressedState = false;
   static unsigned long lastTouchTime = 0;
   const unsigned long debounceDelay = 200;
   buttonLeftTriggered = false;
   buttonRightTriggered = false;
   buttonSecretTriggered = false;
   buttonJumpTriggered = false;
+  buttonDecrementTriggered = false;
+  buttonIncrementTriggered = false;
   bool pressed = ts.tirqTouched() && ts.touched();
   bool currentLeftContainsManual = false;
   bool currentRightContainsManual = false;
   bool currentSecretContainsManual = false;
   bool currentJumpContainsManual = false;
+  bool currentDecContainsManual = false;
+  bool currentIncContainsManual = false;
   if (pressed) {
     TS_Point p = ts.getPoint();
     t_x = map(p.y, 338, 3739, tft.width(), 0);
@@ -960,12 +977,21 @@ void readButtons() {
       touchIsBeingHeld = true;
       touchHoldStartTime = millis();
     }
-    int leftBtnL = 15, leftBtnR = 115, leftBtnT = 180, leftBtnB = 230;
+    int leftBtnL = 15, leftBtnR = 85, leftBtnT = 150, leftBtnB = 240;
     if (t_x >= leftBtnL && t_x <= leftBtnR && t_y >= leftBtnT && t_y <= leftBtnB) {
       currentLeftContainsManual = true;
       Serial.println("L: Touch in Left Button (Cycle/Prev/Back/OK)");
     }
-    int rightBtnL = -15, rightBtnR = 85, rightBtnT = 20, rightBtnB = 70;
+    // Split left for decrement and increment
+    int decBtnL = 15, decBtnR = 85, decBtnT = 201, decBtnB = 240;
+    int incBtnL = 15, incBtnR = 85, incBtnT = 150, incBtnB = 200;
+    if (t_x >= decBtnL && t_x <= decBtnR && t_y >= decBtnT && t_y <= decBtnB) {
+      currentDecContainsManual = true;
+    }
+    if (t_x >= incBtnL && t_x <= incBtnR && t_y >= incBtnT && t_y <= incBtnB) {
+      currentIncContainsManual = true;
+    }
+    int rightBtnL = 10, rightBtnR = 85, rightBtnT = 0, rightBtnB = 85;
     if (t_x >= rightBtnL && t_x <= rightBtnR && t_y >= rightBtnT && t_y <= rightBtnB) {
       currentRightContainsManual = true;
       Serial.println("L: Right Button (Next/Confirm/OK)");
@@ -983,21 +1009,29 @@ void readButtons() {
   } else {
     if (touchIsBeingHeld && (millis() - lastTouchTime > debounceDelay)) {
       touchIsBeingHeld = false;
-      if (wasLeftPressedState && !currentLeftContainsManual) {
+      if (wasLeftPressedState) {
         buttonLeftTriggered = true;
         Serial.println("L: Left Button Triggered");
       }
-      if (wasRightPressedState && !currentRightContainsManual) {
+      if (wasRightPressedState) {
         buttonRightTriggered = true;
         Serial.println("L: Right Button Triggered");
       }
-      if (wasSecretPressedState && !currentSecretContainsManual) {
+      if (wasSecretPressedState) {
         buttonSecretTriggered = true;
         Serial.println("L: Secret Button Triggered");
       }
-      if (wasJumpPressedState && !currentJumpContainsManual) {
+      if (wasJumpPressedState) {
         buttonJumpTriggered = true;
         Serial.println("L: Jump Button Triggered");
+      }
+      if (wasDecPressedState) {
+        buttonDecrementTriggered = true;
+        Serial.println("L: Decrement Button Triggered");
+      }
+      if (wasIncPressedState) {
+        buttonIncrementTriggered = true;
+        Serial.println("L: Increment Button Triggered");
       }
       lastTouchTime = millis();
     }
@@ -1006,6 +1040,8 @@ void readButtons() {
   wasRightPressedState = currentRightContainsManual;
   wasSecretPressedState = currentSecretContainsManual;
   wasJumpPressedState = currentJumpContainsManual;
+  wasDecPressedState = currentDecContainsManual;
+  wasIncPressedState = currentIncContainsManual;
 }
 
 // ========================================
@@ -1147,6 +1183,8 @@ void loop() {
     buttonRightTriggered = false;
     buttonSecretTriggered = false;
     buttonJumpTriggered = false;
+    buttonDecrementTriggered = false;
+    buttonIncrementTriggered = false;
     touchIsBeingHeld = false;
   }
   if (firstLoop) {
@@ -1380,10 +1418,14 @@ void loop() {
           showPasswordEntryScreen();
           Serial.println("L: Password Entry Screen Redrawn");
       }
-      if (buttonLeftTriggered) {
+      if (buttonDecrementTriggered) {
+          currentDigitValue = (currentDigitValue - 1 + 10) % 10;
+          showPasswordEntryScreen();
+          Serial.printf("L: Digit decremented to %d at index %d\n", currentDigitValue, currentDigitIndex);
+      } else if (buttonIncrementTriggered) {
           currentDigitValue = (currentDigitValue + 1) % 10;
           showPasswordEntryScreen();
-          Serial.printf("L: Digit cycled to %d at index %d\n", currentDigitValue, currentDigitIndex);
+          Serial.printf("L: Digit incremented to %d at index %d\n", currentDigitValue, currentDigitIndex);
       } else if (buttonRightTriggered) {
           Serial.printf("L: Right Button (Next/OK) Pressed at digit index %d\n", currentDigitIndex);
           password[currentDigitIndex] = currentDigitValue + '0';

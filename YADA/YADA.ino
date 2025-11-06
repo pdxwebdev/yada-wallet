@@ -37,7 +37,7 @@ SPIClass touchSPI(VSPI);
 XPT2046_Touchscreen ts(TOUCH_CS, TOUCH_IRQ);
 
 // --- On-Screen Buttons ---
-#define MAX_BUTTONS 6
+#define MAX_BUTTONS 7
 TFT_eSPI_Button buttons[MAX_BUTTONS];
 #define BUTTON_H 50 // Increased Height
 #define BUTTON_W 100
@@ -58,6 +58,7 @@ TFT_eSPI_Button buttons[MAX_BUTTONS];
 #define BTN_CONFIRM 1
 #define BTN_DECREMENT 4
 #define BTN_INCREMENT 5
+#define BTN_CHARSET 6
 
 // --- Blockchain Configuration ---
 const Network BSCNetwork = {
@@ -103,6 +104,7 @@ bool buttonJumpTriggered = false;
 bool buttonDecrementTriggered = false;
 bool buttonIncrementTriggered = false;
 bool buttonConfirmTriggered = false;
+bool buttonCharsetTriggered = false;
 unsigned long touchHoldStartTime = 0;
 bool touchIsBeingHeld = false;
 
@@ -138,8 +140,16 @@ const uint32_t MODULO_2_31 = 2147483647; // 2^31
 const int PIN_LENGTH = 6;
 char password[PIN_LENGTH + 1];
 int currentDigitIndex = 0;
-const char* CHARSET = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()<>?:\"';[]\\{}|`~_+-=";
-const int CHARSET_SIZE = 91;
+enum CharsetMode { MODE_NUMBERS, MODE_LOWER, MODE_UPPER, MODE_SPECIAL, NUM_MODES };
+CharsetMode currentCharsetMode = MODE_NUMBERS;
+const char* charsetModes[NUM_MODES] = {
+  "0123456789",
+  "abcdefghijklmnopqrstuvwxyz",
+  "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+  "!@#$%^&*()<>?:\"';[]\\{}|`~_+-="
+};
+const int modeSizes[NUM_MODES] = {10, 26, 26, 29};
+const char* modeLabels[NUM_MODES] = {"123", "a", "A", "@"};
 int currentCharIndex = 0;
 bool passwordConfirmed = false;
 
@@ -171,13 +181,6 @@ char getNextLetter(char c) {
   if (idx < 0) return 'a';
   idx = (idx + 1) % 26;
   return alphabet[idx];
-}
-
-int getCharsetIndex(char c) {
-  for (int i = 0; i < CHARSET_SIZE; i++) {
-    if (CHARSET[i] == c) return i;
-  }
-  return 0; // fallback
 }
 
 bool isValidWord(const char* wordStr, uint16_t& index) {
@@ -478,7 +481,8 @@ HDPrivateKey deriveHardened(HDPrivateKey root, uint32_t index) {
     // Serial.println(errorMessage);
     passwordConfirmed = false;
     currentDigitIndex = 0;
-    currentCharIndex = 52;
+    currentCharIndex = 0;
+    currentCharsetMode = MODE_NUMBERS;
     memset(password, '_', PIN_LENGTH);
     password[PIN_LENGTH] = '\0';
   }
@@ -713,7 +717,7 @@ void showPasswordEntryScreen() {
     if (i < currentDigitIndex) {
       displayChar = '*';
     } else if (i == currentDigitIndex) {
-      displayChar = CHARSET[currentCharIndex];
+      displayChar = charsetModes[currentCharsetMode][currentCharIndex];
     } else {
       displayChar = '_';
     }
@@ -737,6 +741,11 @@ void showPasswordEntryScreen() {
   buttons[BTN_DECREMENT].drawButton();
   buttons[BTN_INCREMENT].initButton(&tft, incButtonCenterX, buttonCenterY, SPLIT_BUTTON_W, BUTTON_H, TFT_WHITE, TFT_BLUE, TFT_BLACK, ">", 2);
   buttons[BTN_INCREMENT].drawButton();
+
+  // Draw charset switch button next to >
+  int charsetButtonCenterX = 140;
+  buttons[BTN_CHARSET].initButton(&tft, charsetButtonCenterX, buttonCenterY, SPLIT_BUTTON_W, BUTTON_H, TFT_WHITE, TFT_MAGENTA, TFT_BLACK, (char*)modeLabels[currentCharsetMode], 2);
+  buttons[BTN_CHARSET].drawButton();
 }
 
 
@@ -964,6 +973,7 @@ void readButtons() {
   static bool wasIncPressedState = false;
   static bool wasNextPressedState = false;
   static bool wasOkPressedState = false;
+  static bool wasCharsetPressedState = false;
   static unsigned long lastTouchTime = 0;
   const unsigned long debounceDelay = 200;
   buttonLeftTriggered = false;
@@ -973,6 +983,7 @@ void readButtons() {
   buttonDecrementTriggered = false;
   buttonIncrementTriggered = false;
   buttonConfirmTriggered = false;
+  buttonCharsetTriggered = false;
   bool pressed = ts.tirqTouched() && ts.touched();
   bool currentLeftContainsManual = false;
   bool currentRightContainsManual = false;
@@ -982,6 +993,7 @@ void readButtons() {
   bool currentIncContainsManual = false;
   bool currentNextContainsManual = false;
   bool currentOkContainsManual = false;
+  bool currentCharsetContainsManual = false;
   if (pressed) {
     TS_Point p = ts.getPoint();
     t_x = map(p.y, 338, 3739, tft.width(), 0);
@@ -998,12 +1010,17 @@ void readButtons() {
     }
     // Split left for decrement and increment
     int decBtnL = 15, decBtnR = 85, decBtnT = 201, decBtnB = 240;
-    int incBtnL = 15, incBtnR = 85, incBtnT = 150, incBtnB = 200;
+    int incBtnL = 15, incBtnR = 85, incBtnT = 151, incBtnB = 200;
     if (t_x >= decBtnL && t_x <= decBtnR && t_y >= decBtnT && t_y <= decBtnB) {
       currentDecContainsManual = true;
     }
     if (t_x >= incBtnL && t_x <= incBtnR && t_y >= incBtnT && t_y <= incBtnB) {
       currentIncContainsManual = true;
+    }
+    // Charset switch button next to increment
+    int charsetBtnL = 15, charsetBtnR = 85, charsetBtnT = 100, charsetBtnB = 150;
+    if (t_x >= charsetBtnL && t_x <= charsetBtnR && t_y >= charsetBtnT && t_y <= charsetBtnB) {
+      currentCharsetContainsManual = true;
     }
     // Split right for next and ok (horizontal split, bottom right)
     int rightNextL = 15, rightNextR = 85, rightNextT = 46, rightNextB = 95;
@@ -1054,6 +1071,9 @@ void readButtons() {
         buttonIncrementTriggered = true;
         // Serial.println("L: Increment Button Triggered");
       }
+      if (wasCharsetPressedState) {
+        buttonCharsetTriggered = true;
+      }
       if (wasNextPressedState || wasOkPressedState) {
         buttonRightTriggered = true;
       }
@@ -1069,6 +1089,7 @@ void readButtons() {
   wasJumpPressedState = currentJumpContainsManual;
   wasDecPressedState = currentDecContainsManual;
   wasIncPressedState = currentIncContainsManual;
+  wasCharsetPressedState = currentCharsetContainsManual;
   wasNextPressedState = currentNextContainsManual;
   wasOkPressedState = currentOkContainsManual;
 }
@@ -1103,7 +1124,8 @@ void setup() {
     memset(password, '_', PIN_LENGTH);
     password[PIN_LENGTH] = '\0';
     currentDigitIndex = 0;
-    currentCharIndex = 52;
+    currentCharIndex = 0;
+    currentCharsetMode = MODE_NUMBERS;
     passwordConfirmed = false;
     currentState = STATE_WALLET_TYPE_SELECTION; // Start with wallet type selection
     // Serial.println("Setup: Init state -> WALLET_TYPE_SELECTION.");
@@ -1215,6 +1237,7 @@ void loop() {
     buttonDecrementTriggered = false;
     buttonIncrementTriggered = false;
     buttonConfirmTriggered = false;
+    buttonCharsetTriggered = false;
     touchIsBeingHeld = false;
   }
   if (firstLoop) {
@@ -1285,7 +1308,8 @@ void loop() {
           // Serial.println("L: Saved OK -> Proceeding to Password Entry");
           currentState = STATE_PASSWORD_ENTRY;
           currentDigitIndex = 0;
-          currentCharIndex = 52;
+          currentCharIndex = 0;
+          currentCharsetMode = MODE_NUMBERS;
           memset(password, '_', PIN_LENGTH);
           password[PIN_LENGTH] = '\0';
         } else {
@@ -1394,7 +1418,8 @@ void loop() {
                   // Serial.println("L: Imported mnemonic saved, proceeding to Password Entry");
                   currentState = STATE_PASSWORD_ENTRY;
                   currentDigitIndex = 0;
-                  currentCharIndex = 52;
+                  currentCharIndex = 0;
+                  currentCharsetMode = MODE_NUMBERS;
                   memset(password, '_', PIN_LENGTH);
                   password[PIN_LENGTH] = '\0';
                 } else {
@@ -1449,7 +1474,7 @@ void loop() {
           // Serial.println("L: Password Entry Screen Redrawn");
       }
       if (buttonConfirmTriggered) {
-        password[currentDigitIndex] = CHARSET[currentCharIndex];
+        password[currentDigitIndex] = charsetModes[currentCharsetMode][currentCharIndex];
         password[PIN_LENGTH] = '\0';
         // Serial.print("L: Full Password Confirmed via OK button: ");
         // Serial.println(password);
@@ -1459,19 +1484,25 @@ void loop() {
         hdWalletKey = HDPrivateKey();
         currentState = STATE_BLOCKCHAIN_SELECTION;
         selectedBlockchainIndex = 0;
+      } else if (buttonCharsetTriggered) {
+        currentCharsetMode = static_cast<CharsetMode>((currentCharsetMode + 1) % NUM_MODES);
+        currentCharIndex = 0;
+        showPasswordEntryScreen();
       } else if (buttonDecrementTriggered) {
-          currentCharIndex = (currentCharIndex + CHARSET_SIZE - 1) % CHARSET_SIZE;
+          int sz = modeSizes[currentCharsetMode];
+          currentCharIndex = (currentCharIndex + sz - 1) % sz;
           showPasswordEntryScreen();
-          // Serial.printf("L: Char decremented to %c at index %d\n", CHARSET[currentCharIndex], currentDigitIndex);
+          // Serial.printf("L: Char decremented to %c at index %d\n", charsetModes[currentCharsetMode][currentCharIndex], currentDigitIndex);
       } else if (buttonIncrementTriggered) {
-          currentCharIndex = (currentCharIndex + 1) % CHARSET_SIZE;
+          int sz = modeSizes[currentCharsetMode];
+          currentCharIndex = (currentCharIndex + 1) % sz;
           showPasswordEntryScreen();
-          // Serial.printf("L: Char incremented to %c at index %d\n", CHARSET[currentCharIndex], currentDigitIndex);
+          // Serial.printf("L: Char incremented to %c at index %d\n", charsetModes[currentCharsetMode][currentCharIndex], currentDigitIndex);
       } else if (buttonRightTriggered) {
           // Serial.printf("L: Right Button (Next) Pressed at digit index %d\n", currentDigitIndex);
-          password[currentDigitIndex] = CHARSET[currentCharIndex];
+          password[currentDigitIndex] = charsetModes[currentCharsetMode][currentCharIndex];
           currentDigitIndex++;
-          currentCharIndex = 52;
+          currentCharIndex = 0;
           if (currentDigitIndex >= PIN_LENGTH) {
             password[PIN_LENGTH] = '\0';
             // Serial.print("L: Full Password Entered via Next button: ");
@@ -1565,7 +1596,8 @@ void loop() {
                     displayErrorScreen(errorMessage);
                     passwordConfirmed = false;
                     currentDigitIndex = 0;
-                    currentCharIndex = 52;
+                    currentCharIndex = 0;
+                    currentCharsetMode = MODE_NUMBERS;
                     memset(password, '_', PIN_LENGTH);
                     password[PIN_LENGTH] = '\0';
                     currentState = STATE_ERROR;
@@ -1577,7 +1609,8 @@ void loop() {
                     displayErrorScreen(errorMessage);
                     passwordConfirmed = false;
                     currentDigitIndex = 0;
-                    currentCharIndex = 52;
+                    currentCharIndex = 0;
+                    currentCharsetMode = MODE_NUMBERS;
                     memset(password, '_', PIN_LENGTH);
                     password[PIN_LENGTH] = '\0';
                     currentState = STATE_ERROR;
@@ -1590,7 +1623,8 @@ void loop() {
                     displayErrorScreen(errorMessage);
                     passwordConfirmed = false;
                     currentDigitIndex = 0;
-                    currentCharIndex = 52;
+                    currentCharIndex = 0;
+                    currentCharsetMode = MODE_NUMBERS;
                     memset(password, '_', PIN_LENGTH);
                     password[PIN_LENGTH] = '\0';
                     currentState = STATE_ERROR;
@@ -1913,7 +1947,8 @@ void loop() {
         // Serial.println("L: Error Acknowledged.");
         currentState = STATE_WALLET_TYPE_SELECTION; // Return to wallet type selection
         currentDigitIndex = 0;
-        currentCharIndex = 52;
+        currentCharIndex = 0;
+        currentCharsetMode = MODE_NUMBERS;
         passwordConfirmed = false;
         memset(password, '_', PIN_LENGTH);
         password[PIN_LENGTH] = '\0';
@@ -1928,7 +1963,8 @@ void loop() {
       displayErrorScreen(errorMessage);
       currentState = STATE_WALLET_TYPE_SELECTION; // Revert to wallet type selection on error
       currentDigitIndex = 0;
-      currentCharIndex = 52;
+      currentCharIndex = 0;
+      currentCharsetMode = MODE_NUMBERS;
       passwordConfirmed = false;
       memset(password, '_', PIN_LENGTH);
       password[PIN_LENGTH] = '\0';

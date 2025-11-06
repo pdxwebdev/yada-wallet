@@ -102,6 +102,7 @@ bool buttonSecretTriggered = false;
 bool buttonJumpTriggered = false;
 bool buttonDecrementTriggered = false;
 bool buttonIncrementTriggered = false;
+bool buttonConfirmTriggered = false;
 unsigned long touchHoldStartTime = 0;
 bool touchIsBeingHeld = false;
 
@@ -184,14 +185,14 @@ bool isValidWord(const char* wordStr, uint16_t& index) {
 String keccak256Address(const PublicKey& key, unsigned char* output) {
     uint8_t input[64];
     String keyHex = key.toString(); // Should return uncompressed key
-    Serial.print("Public Key: ");
-    Serial.println(keyHex);
-    Serial.print("Public Key Length: ");
-    Serial.println(keyHex.length());
+    // Serial.print("Public Key: ");
+    // Serial.println(keyHex);
+    // Serial.print("Public Key Length: ");
+    // Serial.println(keyHex.length());
     
     // Validate uncompressed key (130 chars, starts with "04")
     if (keyHex.length() != 130 || keyHex.substring(0, 2) != "04") {
-        Serial.println("E: Invalid public key format or length (expected 130 chars, starting with 04)");
+        // Serial.println("E: Invalid public key format or length (expected 130 chars, starting with 04)");
         memset(output, 0, 32);
         return "";
     }
@@ -201,24 +202,24 @@ String keccak256Address(const PublicKey& key, unsigned char* output) {
         String byteStr = keyHex.substring(2 + i * 2, 4 + i * 2);
         input[i] = (uint8_t)strtol(byteStr.c_str(), nullptr, 16);
         if (i < 4 || i >= 60) {
-            Serial.printf("Input Byte %d: %02x\n", i, input[i]);
+            // Serial.printf("Input Byte %d: %02x\n", i, input[i]);
         }
     }
     
     // Compute Keccak-256 hash
-    Serial.print("Heap Before Keccak: ");
-    Serial.println(heap_caps_get_free_size(MALLOC_CAP_DEFAULT));
+    // Serial.print("Heap Before Keccak: ");
+    // Serial.println(heap_caps_get_free_size(MALLOC_CAP_DEFAULT));
     Keccak keccak(Keccak::Keccak256);
     keccak.add(input, 64);
     std::string hash = keccak.getHash();
     
-    Serial.print("Keccak-256 Hash: ");
-    Serial.println(hash.c_str());
-    Serial.print("Hash Length: ");
-    Serial.println(hash.length());
+    // Serial.print("Keccak-256 Hash: ");
+    // Serial.println(hash.c_str());
+    // Serial.print("Hash Length: ");
+    // Serial.println(hash.length());
     
     if (hash.length() != 64) {
-        Serial.println("E: Invalid Keccak-256 hash length");
+        // Serial.println("E: Invalid Keccak-256 hash length");
         memset(output, 0, 32);
         return "";
     }
@@ -228,24 +229,24 @@ String keccak256Address(const PublicKey& key, unsigned char* output) {
         std::string hexByte = hash.substr(i * 2, 2);
         output[i] = (uint8_t)strtol(hexByte.c_str(), nullptr, 16);
         if (i >= 12 && i < 16) {
-            Serial.printf("Output Byte %d: %02x\n", i, output[i]);
+            // Serial.printf("Output Byte %d: %02x\n", i, output[i]);
         }
     }
     
     // Generate the lowercase address (last 20 bytes)
     String lowercaseAddress = bytesToHex(output + 12, 20);
-    Serial.println("Lowercase Address: " + lowercaseAddress);
+    // Serial.println("Lowercase Address: " + lowercaseAddress);
     
     // Compute Keccak-256 hash of the lowercase address for EIP-55 checksum
     Keccak keccakAddr(Keccak::Keccak256);
     keccakAddr.add((const uint8_t*)lowercaseAddress.c_str(), lowercaseAddress.length());
     std::string addrHash = keccakAddr.getHash();
     
-    Serial.print("Address Keccak-256 Hash: ");
-    Serial.println(addrHash.c_str());
+    // Serial.print("Address Keccak-256 Hash: ");
+    // Serial.println(addrHash.c_str());
     
     if (addrHash.length() != 64) {
-        Serial.println("E: Invalid address Keccak-256 hash length");
+        // Serial.println("E: Invalid address Keccak-256 hash length");
         memset(output, 0, 32);
         return "";
     }
@@ -257,7 +258,7 @@ String keccak256Address(const PublicKey& key, unsigned char* output) {
         char c = lowercaseAddress[i];
         int hashNibble = hexCharToDec(addrHash[i]);
         if (hashNibble < 0) {
-            Serial.println("E: Invalid character in address hash");
+            // Serial.println("E: Invalid character in address hash");
             memset(output, 0, 32);
             return "";
         }
@@ -267,10 +268,10 @@ String keccak256Address(const PublicKey& key, unsigned char* output) {
         checksumAddress += c;
     }
     
-    Serial.println("Checksummed Address: " + checksumAddress);
+    // Serial.println("Checksummed Address: " + checksumAddress);
     
-    Serial.print("Heap After Keccak: ");
-    Serial.println(heap_caps_get_free_size(MALLOC_CAP_DEFAULT));
+    // Serial.print("Heap After Keccak: ");
+    // Serial.println(heap_caps_get_free_size(MALLOC_CAP_DEFAULT));
     
     return checksumAddress;
 }
@@ -362,7 +363,7 @@ String sha256Hex(const uint8_t* data, size_t len) {
 String hashPublicKey(const PublicKey& pk) {
   String h = pk.toString();
   if (h.length() == 0) return "Hashing Error";
-  if (h.length() != 66 && h.length() != 130) Serial.printf("W: Bad Pk len: %d\n", h.length());
+  // if (h.length() != 66 && h.length() != 130) Serial.printf("W: Bad Pk len: %d\n", h.length());
   size_t l = h.length() / 2;
   if (l == 0) return "Hashing Error";
   uint8_t* b = (uint8_t*)malloc(l);
@@ -446,15 +447,15 @@ uint32_t deriveIndex(String factor, int level) {
   for (int i = 0; i < 32; i++) {
     sprintf(&hex[i * 2], "%02x", hash[i]);
   }
-  Serial.print("SHA256 hash: ");
-  Serial.println(hex);
+  // Serial.print("SHA256 hash: ");
+  // Serial.println(hex);
   BigNumber bigNumber = hexToBigNumber(hex);
-  Serial.print("bigNumber: ");
-  Serial.println(bigNumber);
+  // Serial.print("bigNumber: ");
+  // Serial.println(bigNumber);
   BigNumber modulo(MODULO_2_31);
   BigNumber remainder = bigNumber % modulo;
-  Serial.print("deriveIndex index: ");
-  Serial.println(remainder);
+  // Serial.print("deriveIndex index: ");
+  // Serial.println(remainder);
   BigNumber::finish();
   return remainder;
 }
@@ -465,15 +466,15 @@ HDPrivateKey deriveHardened(HDPrivateKey root, uint32_t index) {
   bool isValid = key.isValid();
   if (!isValid) {
     String errorMessage = "hdWallet Key Invalid (" + path + ")";
-    Serial.println(errorMessage);
+    // Serial.println(errorMessage);
     passwordConfirmed = false;
     currentDigitIndex = 0;
     currentDigitValue = 0;
     memset(password, '_', PIN_LENGTH);
     password[PIN_LENGTH] = '\0';
   }
-  Serial.print("L: root derived: ");
-  Serial.println(path);
+  // Serial.print("L: root derived: ");
+  // Serial.println(path);
   return key;
 }
 
@@ -481,7 +482,7 @@ HDPrivateKey deriveSecurePath(HDPrivateKey root, String secondFactor) {
   HDPrivateKey currentNode = root;
   // First level is the blockchain-specific derivation (e.g., m/0' or m/1')
   currentNode = deriveHardened(currentNode, blockchains[selectedBlockchainIndex].derivationIndex);
-  Serial.printf("L: Derived blockchain path m/%u'\n", blockchains[selectedBlockchainIndex].derivationIndex);
+  // Serial.printf("L: Derived blockchain path m/%u'\n", blockchains[selectedBlockchainIndex].derivationIndex);
   // Continue with 3 levels using the second factor (PIN)
   for (int level = 0; level < 3; level++) {
     uint32_t index = deriveIndex(secondFactor, level);
@@ -541,10 +542,10 @@ String generateMnemonicFromEntropy(const uint8_t* e, size_t len) {
 void drawButtons(int numButtons) {
   for (int i = 0; i < numButtons; i++) {
     if (i == BTN_LEFT && currentState == STATE_WALLET_VIEW && currentRotationIndex == 0) {
-      Serial.println("L: Skipping BTN_LEFT (rotation 0 in STATE_WALLET_VIEW)");
+      // Serial.println("L: Skipping BTN_LEFT (rotation 0 in STATE_WALLET_VIEW)");
       continue;
     }
-    Serial.printf("L: Drawing button %d in state %d\n", i, currentState);
+    // Serial.printf("L: Drawing button %d in state %d\n", i, currentState);
     buttons[i].drawButton();
   }
 }
@@ -711,19 +712,18 @@ void showPasswordEntryScreen() {
     tft.drawString(tempStr, currentX + digitBoxSize / 2, digitY + digitBoxSize / 2 + 2);
   }
 
-  char nextLabel[5] = "Next";
-  if (currentDigitIndex == PIN_LENGTH - 1) {
-    strcpy(nextLabel, "OK");
-  }
-  int rightButtonCenterX = 255;
-  int rightButtonCenterY = 205;
-  buttons[BTN_NEXT].initButton(&tft, rightButtonCenterX, rightButtonCenterY, BUTTON_W, BUTTON_H, TFT_WHITE, TFT_GREEN, TFT_BLACK, nextLabel, 2);
-  buttons[BTN_NEXT].drawButton();
+  // Draw split buttons for next and ok (horizontal split like inc/dec)
+  int nextButtonCenterX = 230;
+  int okButtonCenterX = 280;
+  int buttonCenterY = 205;
+  buttons[BTN_RIGHT].initButton(&tft, nextButtonCenterX, buttonCenterY, SPLIT_BUTTON_W, BUTTON_H, TFT_WHITE, TFT_GREEN, TFT_BLACK, "Next", 2);
+  buttons[BTN_RIGHT].drawButton();
+  buttons[BTN_CONFIRM].initButton(&tft, okButtonCenterX, buttonCenterY, SPLIT_BUTTON_W, BUTTON_H, TFT_WHITE, TFT_GREEN, TFT_BLACK, "OK", 2);
+  buttons[BTN_CONFIRM].drawButton();
 
   // Draw split buttons for decrement and increment
   int decButtonCenterX = 40;
   int incButtonCenterX = 90;
-  int buttonCenterY = 205;
   buttons[BTN_DECREMENT].initButton(&tft, decButtonCenterX, buttonCenterY, SPLIT_BUTTON_W, BUTTON_H, TFT_WHITE, TFT_BLUE, TFT_BLACK, "<", 2);
   buttons[BTN_DECREMENT].drawButton();
   buttons[BTN_INCREMENT].initButton(&tft, incButtonCenterX, buttonCenterY, SPLIT_BUTTON_W, BUTTON_H, TFT_WHITE, TFT_BLUE, TFT_BLACK, ">", 2);
@@ -871,7 +871,7 @@ void displaySingleRotationQR(int rIdx, const String& combinedQRData, const Strin
   QRCode qr;
   size_t bufferSize = qrcode_getBufferSize(qrVersion);
   if (bufferSize == 0 || bufferSize > 3500) {
-    Serial.printf("E: QR Buffer Size Error V%d, Size: %u\n", qrVersion, bufferSize);
+    // Serial.printf("E: QR Buffer Size Error V%d, Size: %u\n", qrVersion, bufferSize);
     displayErrorScreen("QR Buffer Size Error V" + String(qrVersion));
     return;
   }
@@ -881,10 +881,10 @@ void displaySingleRotationQR(int rIdx, const String& combinedQRData, const Strin
     return;
   }
   if (qrcode_initText(&qr, qrDataBuffer, qrVersion, eccLevel, combinedQRData.c_str()) != 0) {
-    Serial.printf("E: QR Init Fail V%d L=%d %s\n", qrVersion, combinedQRData.length(), label.c_str());
+    // Serial.printf("E: QR Init Fail V%d L=%d %s\n", qrVersion, combinedQRData.length(), label.c_str());
     int nextVersion = qrVersion + 1;
     if (nextVersion <= 13) {
-      Serial.println("Trying V" + String(nextVersion));
+      // Serial.println("Trying V" + String(nextVersion));
       free(qrDataBuffer);
       displaySingleRotationQR(rIdx, combinedQRData, label, nextVersion);
       return;
@@ -953,6 +953,8 @@ void readButtons() {
   static bool wasJumpPressedState = false;
   static bool wasDecPressedState = false;
   static bool wasIncPressedState = false;
+  static bool wasNextPressedState = false;
+  static bool wasOkPressedState = false;
   static unsigned long lastTouchTime = 0;
   const unsigned long debounceDelay = 200;
   buttonLeftTriggered = false;
@@ -961,6 +963,7 @@ void readButtons() {
   buttonJumpTriggered = false;
   buttonDecrementTriggered = false;
   buttonIncrementTriggered = false;
+  buttonConfirmTriggered = false;
   bool pressed = ts.tirqTouched() && ts.touched();
   bool currentLeftContainsManual = false;
   bool currentRightContainsManual = false;
@@ -968,11 +971,13 @@ void readButtons() {
   bool currentJumpContainsManual = false;
   bool currentDecContainsManual = false;
   bool currentIncContainsManual = false;
+  bool currentNextContainsManual = false;
+  bool currentOkContainsManual = false;
   if (pressed) {
     TS_Point p = ts.getPoint();
     t_x = map(p.y, 338, 3739, tft.width(), 0);
     t_y = map(p.x, 414, 3857, tft.height(), 0);
-    Serial.printf("L: Touch at (%d, %d)\n", t_x, t_y);
+    // Serial.printf("L: Touch at (%d, %d)\n", t_x, t_y);
     if (!touchIsBeingHeld) {
       touchIsBeingHeld = true;
       touchHoldStartTime = millis();
@@ -980,7 +985,7 @@ void readButtons() {
     int leftBtnL = 15, leftBtnR = 85, leftBtnT = 150, leftBtnB = 240;
     if (t_x >= leftBtnL && t_x <= leftBtnR && t_y >= leftBtnT && t_y <= leftBtnB) {
       currentLeftContainsManual = true;
-      Serial.println("L: Touch in Left Button (Cycle/Prev/Back/OK)");
+      // Serial.println("L: Touch in Left Button (Cycle/Prev/Back/OK)");
     }
     // Split left for decrement and increment
     int decBtnL = 15, decBtnR = 85, decBtnT = 201, decBtnB = 240;
@@ -991,47 +996,60 @@ void readButtons() {
     if (t_x >= incBtnL && t_x <= incBtnR && t_y >= incBtnT && t_y <= incBtnB) {
       currentIncContainsManual = true;
     }
-    int rightBtnL = 10, rightBtnR = 85, rightBtnT = 0, rightBtnB = 85;
-    if (t_x >= rightBtnL && t_x <= rightBtnR && t_y >= rightBtnT && t_y <= rightBtnB) {
-      currentRightContainsManual = true;
-      Serial.println("L: Right Button (Next/Confirm/OK)");
+    // Split right for next and ok (horizontal split, bottom right)
+    int rightNextL = 15, rightNextR = 85, rightNextT = 46, rightNextB = 95;
+    if (t_x >= rightNextL && t_x <= rightNextR && t_y >= rightNextT && t_y <= rightNextB) {
+      currentNextContainsManual = true;
+      // Serial.println("L: Touch in Next Button");
     }
+    int rightOkL = 15, rightOkR = 85, rightOkT = 0, rightOkB = 45;
+    if (t_x >= rightOkL && t_x <= rightOkR && t_y >= rightOkT && t_y <= rightOkB) {
+      currentOkContainsManual = true;
+      // Serial.println("L: Touch in OK Button");
+    }
+    currentRightContainsManual = currentNextContainsManual || currentOkContainsManual;
     int secretBtnL = 282, secretBtnR = 318, secretBtnT = 2, secretBtnB = 38;
     if (t_x >= secretBtnL && t_x <= secretBtnR && t_y >= secretBtnT && t_y <= secretBtnB) {
       currentSecretContainsManual = true;
-      Serial.println("L: Touch in Secret Button");
+      // Serial.println("L: Touch in Secret Button");
     }
     int jumpBtnL = 215, jumpBtnR = 270, jumpBtnT = 2, jumpBtnB = 38;
     if (t_x >= jumpBtnL && t_x <= jumpBtnR && t_y >= jumpBtnT && t_y <= jumpBtnB) {
       currentJumpContainsManual = true;
-      Serial.println("L: Touch in Jump Button");
+      // Serial.println("L: Touch in Jump Button");
     }
   } else {
     if (touchIsBeingHeld && (millis() - lastTouchTime > debounceDelay)) {
       touchIsBeingHeld = false;
       if (wasLeftPressedState) {
         buttonLeftTriggered = true;
-        Serial.println("L: Left Button Triggered");
+        // Serial.println("L: Left Button Triggered");
       }
       if (wasRightPressedState) {
         buttonRightTriggered = true;
-        Serial.println("L: Right Button Triggered");
+        // Serial.println("L: Right Button Triggered");
       }
       if (wasSecretPressedState) {
         buttonSecretTriggered = true;
-        Serial.println("L: Secret Button Triggered");
+        // Serial.println("L: Secret Button Triggered");
       }
       if (wasJumpPressedState) {
         buttonJumpTriggered = true;
-        Serial.println("L: Jump Button Triggered");
+        // Serial.println("L: Jump Button Triggered");
       }
       if (wasDecPressedState) {
         buttonDecrementTriggered = true;
-        Serial.println("L: Decrement Button Triggered");
+        // Serial.println("L: Decrement Button Triggered");
       }
       if (wasIncPressedState) {
         buttonIncrementTriggered = true;
-        Serial.println("L: Increment Button Triggered");
+        // Serial.println("L: Increment Button Triggered");
+      }
+      if (wasNextPressedState || wasOkPressedState) {
+        buttonRightTriggered = true;
+      }
+      if (wasOkPressedState) {
+        buttonConfirmTriggered = true;
       }
       lastTouchTime = millis();
     }
@@ -1042,6 +1060,8 @@ void readButtons() {
   wasJumpPressedState = currentJumpContainsManual;
   wasDecPressedState = currentDecContainsManual;
   wasIncPressedState = currentIncContainsManual;
+  wasNextPressedState = currentNextContainsManual;
+  wasOkPressedState = currentOkContainsManual;
 }
 
 // ========================================
@@ -1050,26 +1070,26 @@ void readButtons() {
 void setup() {
     Serial.begin(115200);
     while (!Serial && millis() < 2000);
-    Serial.println("\n\n--- Yada HW (TFT+Touch - PR #1 + Blockchain Selection + Mnemonic Import Letters) ---");
-    Serial.print("Setup: Init Heap: ");
-    Serial.println(heap_caps_get_free_size(MALLOC_CAP_DEFAULT));
+    // Serial.println("\n\n--- Yada HW (TFT+Touch - PR #1 + Blockchain Selection + Mnemonic Import Letters) ---");
+    // Serial.print("Setup: Init Heap: ");
+    // Serial.println(heap_caps_get_free_size(MALLOC_CAP_DEFAULT));
     pinMode(TOUCH_IRQ, INPUT);
     tft.init();
     tft.setRotation(3);
     tft.fillScreen(TFT_BLACK);
-    Serial.println("Setup: TFT OK (Rotation 3).");
-    Serial.println("Setup: Init Touch SPI (VSPI)...");
+    // Serial.println("Setup: TFT OK (Rotation 3).");
+    // Serial.println("Setup: Init Touch SPI (VSPI)...");
     touchSPI.begin(TOUCH_SCK, TOUCH_MISO, TOUCH_MOSI, TOUCH_CS);
     ts.begin(touchSPI);
     ts.setRotation(tft.getRotation());
-    Serial.println("Setup: Touch OK (Rotation 3).");
+    // Serial.println("Setup: Touch OK (Rotation 3).");
     pinMode(TFT_BL, OUTPUT);
     digitalWrite(TFT_BL, TFT_BACKLIGHT_ON);
-    Serial.println("Setup: BL OK.");
+    // Serial.println("Setup: BL OK.");
     tft.setTextColor(TFT_WHITE, TFT_BLACK);
     tft.setTextDatum(MC_DATUM);
     tft.drawString("YadaCoin Starting...", tft.width() / 2, tft.height() / 2, 4);
-    Serial.println("Setup: Init Msg OK.");
+    // Serial.println("Setup: Init Msg OK.");
     delay(1000);
     memset(password, '_', PIN_LENGTH);
     password[PIN_LENGTH] = '\0';
@@ -1077,10 +1097,10 @@ void setup() {
     currentDigitValue = 0;
     passwordConfirmed = false;
     currentState = STATE_WALLET_TYPE_SELECTION; // Start with wallet type selection
-    Serial.println("Setup: Init state -> WALLET_TYPE_SELECTION.");
+    // Serial.println("Setup: Init state -> WALLET_TYPE_SELECTION.");
     currentJumpDigitIndex = 0;
     currentJumpDigitValue = 0;
-    Serial.println("Setup: Pwd State OK.");
+    // Serial.println("Setup: Pwd State OK.");
     strcpy(currentWordBuffer, "");
     memset(wordIndices, 0, sizeof(wordIndices));
     currentWordIndex = 0;
@@ -1088,19 +1108,19 @@ void setup() {
     newWalletMode = true;
 
     if (!prefs.begin(PREFS_NAMESPACE, false)) {
-        Serial.println("W: Prefs RW Fail. Trying RO...");
+        // Serial.println("W: Prefs RW Fail. Trying RO...");
         if (!prefs.begin(PREFS_NAMESPACE, true)) {
-            Serial.println("E: Prefs RO Fail!");
+            // Serial.println("E: Prefs RO Fail!");
             tft.fillScreen(TFT_RED);
             tft.setTextColor(TFT_WHITE);
             tft.drawString("Storage Error!", tft.width() / 2, tft.height() / 2, 2);
             while (1);
         } else {
-            Serial.println("Setup: Prefs RO OK (initial RO fail).");
+            // Serial.println("Setup: Prefs RO OK (initial RO fail).");
             prefs.end();
         }
     } else {
-        Serial.println("Setup: Prefs RW OK.");
+        // Serial.println("Setup: Prefs RW OK.");
         provisioned = prefs.getBool(PROVISIONED_KEY, false);
         loadedMnemonic = prefs.getString(MNEMONIC_KEY, "");
         currentRotationIndex = prefs.getInt(ROTATION_INDEX_KEY, 0);
@@ -1124,11 +1144,11 @@ void setup() {
             hexToBytes(cachedParentFingerprintHex, parentFingerprint, 4);
             cachedParentKey = HDPrivateKey(privateKey, chaincode, cachedDepth, parentFingerprint, cachedChildNum, blockchains[selectedBlockchainIndex].network, P2PKH);
             cachedRotationIndex = storedRotationIndex;
-            Serial.printf("L: Restored cached key for rotation %d, depth %d, child_num %u\n", cachedRotationIndex, cachedDepth, cachedChildNum);
+            // Serial.printf("L: Restored cached key for rotation %d, depth %d, child_num %u\n", cachedRotationIndex, cachedDepth, cachedChildNum);
         } else {
             cachedRotationIndex = -1;
             cachedParentKey = HDPrivateKey();
-            Serial.println("L: No valid cached key found");
+            // Serial.println("L: No valid cached key found");
         }
         // Load cachedPrevParentKey
         String cachedPrevKeyHex = prefs.getString("CACHED_PREV_KEY", "");
@@ -1146,27 +1166,27 @@ void setup() {
             hexToBytes(cachedPrevParentFingerprintHex, prevParentFingerprint, 4);
             cachedPrevParentKey = HDPrivateKey(prevPrivateKey, prevChaincode, cachedPrevDepth, prevParentFingerprint, cachedPrevChildNum, blockchains[selectedBlockchainIndex].network, P2PKH);
             cachedPrevRotationIndex = storedPrevRotationIndex;
-            Serial.printf("L: Restored cached prev key for rotation %d, depth %d\n", cachedPrevRotationIndex, cachedPrevDepth);
+            // Serial.printf("L: Restored cached prev key for rotation %d, depth %d\n", cachedPrevRotationIndex, cachedPrevDepth);
         } else {
             cachedPrevRotationIndex = -1;
             cachedPrevParentKey = HDPrivateKey();
-            Serial.println("L: No valid cached prev key found");
+            // Serial.println("L: No valid cached prev key found");
         }
         prefs.end();
     }
 
     // Check provisioning status
     if (provisioned && loadedMnemonic.length() > 10) {
-        Serial.println("L: Device provisioned, skipping to Password Entry");
+        // Serial.println("L: Device provisioned, skipping to Password Entry");
         currentState = STATE_PASSWORD_ENTRY;
     } else {
-        Serial.println("L: Device not provisioned, starting with Wallet Type Selection");
+        // Serial.println("L: Device not provisioned, starting with Wallet Type Selection");
         currentState = STATE_WALLET_TYPE_SELECTION;
     }
 
-    Serial.print("Setup: Exit Heap: ");
-    Serial.println(heap_caps_get_free_size(MALLOC_CAP_DEFAULT));
-    Serial.println("Setup OK.");
+    // Serial.print("Setup: Exit Heap: ");
+    // Serial.println(heap_caps_get_free_size(MALLOC_CAP_DEFAULT));
+    // Serial.println("Setup OK.");
 }
 
 // ========================================
@@ -1185,6 +1205,7 @@ void loop() {
     buttonJumpTriggered = false;
     buttonDecrementTriggered = false;
     buttonIncrementTriggered = false;
+    buttonConfirmTriggered = false;
     touchIsBeingHeld = false;
   }
   if (firstLoop) {
@@ -1197,21 +1218,21 @@ void loop() {
     case STATE_WALLET_TYPE_SELECTION:
       if (redrawScreen) {
         showWalletTypeSelectionScreen();
-        Serial.println("L: Wallet Type Selection Screen Redrawn");
+        // Serial.println("L: Wallet Type Selection Screen Redrawn");
       }
       if (buttonLeftTriggered) {
         newWalletMode = !newWalletMode;
-        Serial.printf("L: Wallet mode cycled to %s\n", newWalletMode ? "New" : "Import");
+        // Serial.printf("L: Wallet mode cycled to %s\n", newWalletMode ? "New" : "Import");
         showWalletTypeSelectionScreen();
       } else if (buttonRightTriggered) {
-        Serial.printf("L: Wallet mode selected: %s\n", newWalletMode ? "New" : "Import");
+        // Serial.printf("L: Wallet mode selected: %s\n", newWalletMode ? "New" : "Import");
         if (newWalletMode) {
           // Generate new mnemonic
           uint8_t ent[16];
           esp_fill_random(ent, 16);
           generatedMnemonic = generateMnemonicFromEntropy(ent, 16);
           if (generatedMnemonic.length() > 0) {
-            Serial.println("L: New mnemonic generated: " + generatedMnemonic);
+            // Serial.println("L: New mnemonic generated: " + generatedMnemonic);
             currentState = STATE_SHOW_GENERATED_MNEMONIC;
           } else {
             errorMessage = "Key Gen Fail!";
@@ -1220,7 +1241,7 @@ void loop() {
           }
         } else {
           // Import mode
-          Serial.println("L: Entering mnemonic import mode");
+          // Serial.println("L: Entering mnemonic import mode");
           currentState = STATE_MNEMONIC_IMPORT;
           memset(wordIndices, 0, sizeof(wordIndices));
           strcpy(currentWordBuffer, "");
@@ -1233,7 +1254,7 @@ void loop() {
     case STATE_SHOW_GENERATED_MNEMONIC:
       if (redrawScreen) displayGeneratedMnemonicScreen(generatedMnemonic);
       if (buttonRightTriggered) {
-        Serial.println("L: Mnem Confirm.");
+        // Serial.println("L: Mnem Confirm.");
         bool sM = false, sF = false;
         if (prefs.begin(PREFS_NAMESPACE, false)) {
           if (prefs.putString(MNEMONIC_KEY, generatedMnemonic.c_str())) {
@@ -1252,7 +1273,7 @@ void loop() {
           loadedMnemonic = generatedMnemonic;
           provisioned = true;
           generatedMnemonic = "";
-          Serial.println("L: Saved OK -> Proceeding to Password Entry");
+          // Serial.println("L: Saved OK -> Proceeding to Password Entry");
           currentState = STATE_PASSWORD_ENTRY;
           currentDigitIndex = 0;
           currentDigitValue = 0;
@@ -1268,7 +1289,7 @@ void loop() {
     case STATE_MNEMONIC_IMPORT:
       if (redrawScreen) {
         showMnemonicImportScreen();
-        Serial.println("L: Mnemonic Import Screen Redrawn");
+        // Serial.println("L: Mnemonic Import Screen Redrawn");
       }
       // Handle hold for backspace
       if (pressed && touchIsBeingHeld && (millis() - touchHoldStartTime > 1000)) {
@@ -1279,7 +1300,7 @@ void loop() {
             currentWordBuffer[i] = currentWordBuffer[i + 1];
           }
           cursorPos--;
-          Serial.println("L: Backspace - Current buffer: " + String(currentWordBuffer));
+          // Serial.println("L: Backspace - Current buffer: " + String(currentWordBuffer));
           showMnemonicImportScreen();
           touchHoldStartTime = millis(); // Reset for multiple backspaces
           delay(200); // Debounce
@@ -1293,7 +1314,7 @@ void loop() {
 
         // Early exit: If at end of buffer and no continuations (word complete), ignore cycle
         if (possibles.length() == 0 && cursorPos == len) {
-          Serial.println("L: Cycle ignored - word appears complete; use Next to confirm");
+          // Serial.println("L: Cycle ignored - word appears complete; use Next to confirm");
           showMnemonicImportScreen();  // Redraw to reflect no change
         } else {
           // Normal cycle logic
@@ -1314,8 +1335,8 @@ void loop() {
             currentWordBuffer[cursorPos] = nextChar;
             currentWordBuffer[cursorPos + 1] = '\0';
           }
-          Serial.printf("L: Valid letter cycled at pos %d (word %d): %s (possibles: %s)\n", 
-                        cursorPos, currentWordIndex, currentWordBuffer, possibles.c_str());
+          // Serial.printf("L: Valid letter cycled at pos %d (word %d): %s (possibles: %s)\n", 
+          //              cursorPos, currentWordIndex, currentWordBuffer, possibles.c_str());
           showMnemonicImportScreen();
         }
       } else if (buttonRightTriggered) {
@@ -1340,7 +1361,7 @@ void loop() {
             // Auto-complete or confirm
             strcpy(currentWordBuffer, theOnlyWord.c_str());
             wordIndices[currentWordIndex] = theOnlyIndex;
-            Serial.printf("L: Word %d confirmed/auto-completed: %s (index %d)\n", currentWordIndex + 1, currentWordBuffer, theOnlyIndex);
+            // Serial.printf("L: Word %d confirmed/auto-completed: %s (index %d)\n", currentWordIndex + 1, currentWordBuffer, theOnlyIndex);
             currentWordIndex++;
             if (currentWordIndex >= NUM_WORDS) {
               // Build and validate mnemonic
@@ -1349,7 +1370,7 @@ void loop() {
                 m += String(wordlist[wordIndices[i]]);
                 if (i < NUM_WORDS - 1) m += " ";
               }
-              Serial.println("L: Imported mnemonic: " + m);
+              // Serial.println("L: Imported mnemonic: " + m);
               if (validateMnemonic(m)) {
                 loadedMnemonic = m;
                 bool saveOk = false;
@@ -1361,7 +1382,7 @@ void loop() {
                   prefs.end();
                 }
                 if (saveOk) {
-                  Serial.println("L: Imported mnemonic saved, proceeding to Password Entry");
+                  // Serial.println("L: Imported mnemonic saved, proceeding to Password Entry");
                   currentState = STATE_PASSWORD_ENTRY;
                   currentDigitIndex = 0;
                   currentDigitValue = 0;
@@ -1383,11 +1404,11 @@ void loop() {
               strcpy(currentWordBuffer, "");
               cursorPos = 0;
               showMnemonicImportScreen();
-              Serial.printf("L: Word %d entered, now word %d\n", currentWordIndex, currentWordIndex + 1);
+              // Serial.printf("L: Word %d entered, now word %d\n", currentWordIndex, currentWordIndex + 1);
             }
           } else if (getFirstMatchingWord(currentWordBuffer) == "None") {
             // Invalid prefix
-            Serial.println("E: Invalid prefix: no matching word for '" + String(currentWordBuffer) + "'");
+            // Serial.println("E: Invalid prefix: no matching word for '" + String(currentWordBuffer) + "'");
             tft.fillScreen(TFT_RED);
             tft.setTextColor(TFT_WHITE, TFT_RED);
             tft.setTextDatum(MC_DATUM);
@@ -1402,10 +1423,10 @@ void loop() {
               currentWordBuffer[len] = possibles.charAt(0);
               currentWordBuffer[len + 1] = '\0';
               cursorPos = len + 1;
-              Serial.println("L: Appended first possible letter: " + String(currentWordBuffer));
+              // Serial.println("L: Appended first possible letter: " + String(currentWordBuffer));
               showMnemonicImportScreen();
             } else {
-              Serial.println("L: No possible next letters");
+              // Serial.println("L: No possible next letters");
               showMnemonicImportScreen();
             }
           }
@@ -1416,25 +1437,36 @@ void loop() {
     case STATE_PASSWORD_ENTRY:
       if (redrawScreen) {
           showPasswordEntryScreen();
-          Serial.println("L: Password Entry Screen Redrawn");
+          // Serial.println("L: Password Entry Screen Redrawn");
       }
-      if (buttonDecrementTriggered) {
+      if (buttonConfirmTriggered) {
+        password[currentDigitIndex] = currentDigitValue + '0';
+        password[currentDigitIndex+1] = '\0';
+        // Serial.print("L: Full PIN Confirmed via OK button: ");
+        // Serial.println(password);
+        passwordConfirmed = true;
+        cachedRotationIndex = -1;
+        cachedParentKey = HDPrivateKey();
+        hdWalletKey = HDPrivateKey();
+        currentState = STATE_BLOCKCHAIN_SELECTION;
+        selectedBlockchainIndex = 0;
+      } else if (buttonDecrementTriggered) {
           currentDigitValue = (currentDigitValue - 1 + 10) % 10;
           showPasswordEntryScreen();
-          Serial.printf("L: Digit decremented to %d at index %d\n", currentDigitValue, currentDigitIndex);
+          // Serial.printf("L: Digit decremented to %d at index %d\n", currentDigitValue, currentDigitIndex);
       } else if (buttonIncrementTriggered) {
           currentDigitValue = (currentDigitValue + 1) % 10;
           showPasswordEntryScreen();
-          Serial.printf("L: Digit incremented to %d at index %d\n", currentDigitValue, currentDigitIndex);
+          // Serial.printf("L: Digit incremented to %d at index %d\n", currentDigitValue, currentDigitIndex);
       } else if (buttonRightTriggered) {
-          Serial.printf("L: Right Button (Next/OK) Pressed at digit index %d\n", currentDigitIndex);
+          // Serial.printf("L: Right Button (Next) Pressed at digit index %d\n", currentDigitIndex);
           password[currentDigitIndex] = currentDigitValue + '0';
           currentDigitIndex++;
           currentDigitValue = 0;
           if (currentDigitIndex >= PIN_LENGTH) {
             password[PIN_LENGTH] = '\0';
-            Serial.print("L: Full PIN Entered: ");
-            Serial.println(password);
+            // Serial.print("L: Full PIN Entered via Next button: ");
+            // Serial.println(password);
             passwordConfirmed = true;
             cachedRotationIndex = -1; // Invalidate cache
             cachedParentKey = HDPrivateKey(); // Clear cached key
@@ -1443,7 +1475,7 @@ void loop() {
             selectedBlockchainIndex = 0;
           } else {
               showPasswordEntryScreen();
-              Serial.printf("L: Digit entered, index now %d\n", currentDigitIndex);
+              // Serial.printf("L: Digit entered via Next, index now %d\n", currentDigitIndex);
           }
       }
       break;
@@ -1451,24 +1483,24 @@ void loop() {
     case STATE_BLOCKCHAIN_SELECTION:
       if (redrawScreen) {
           showBlockchainSelectionScreen();
-          Serial.println("L: Blockchain Selection Screen Redrawn");
+          // Serial.println("L: Blockchain Selection Screen Redrawn");
       }
       if (buttonLeftTriggered) {
           selectedBlockchainIndex = (selectedBlockchainIndex + 1) % NUM_BLOCKCHAINS;
-          Serial.printf("L: Blockchain cycled to %s (index %d)\n", blockchains[selectedBlockchainIndex].name, selectedBlockchainIndex);
+          // Serial.printf("L: Blockchain cycled to %s (index %d)\n", blockchains[selectedBlockchainIndex].name, selectedBlockchainIndex);
           showBlockchainSelectionScreen();
       } else if (buttonRightTriggered) {
-          Serial.printf("L: Blockchain selected: %s (index %d)\n", blockchains[selectedBlockchainIndex].name, selectedBlockchainIndex);
+          // Serial.printf("L: Blockchain selected: %s (index %d)\n", blockchains[selectedBlockchainIndex].name, selectedBlockchainIndex);
           if (prefs.begin(PREFS_NAMESPACE, false)) {
               prefs.putInt(BLOCKCHAIN_INDEX_KEY, selectedBlockchainIndex);
               prefs.end();
           }
           if (provisioned && loadedMnemonic.length() > 10 && passwordConfirmed) {
-              Serial.println("L: Mnemonic loaded and PIN confirmed, proceeding to Wallet View");
+              // Serial.println("L: Mnemonic loaded and PIN confirmed, proceeding to Wallet View");
               currentState = STATE_WALLET_VIEW;
               currentRotationIndex = 0;
           } else {
-              Serial.println("W: Provisioned or mnemonic missing after blockchain selection");
+              // Serial.println("W: Provisioned or mnemonic missing after blockchain selection");
               errorMessage = "Wallet Setup Error";
               displayErrorScreen(errorMessage);
               currentState = STATE_ERROR;
@@ -1479,11 +1511,11 @@ void loop() {
     case STATE_WALLET_VIEW: {
         bool walletNeedsRedraw = redrawScreen;
         if (buttonSecretTriggered) {
-            Serial.println("L: Wallet: Secret Button -> Show Secret Mnemonic");
+            // Serial.println("L: Wallet: Secret Button -> Show Secret Mnemonic");
             currentState = STATE_SHOW_SECRET_MNEMONIC;
             goto end_wallet_view_logic;
         } else if (buttonJumpTriggered) {
-            Serial.println("L: Wallet: Jump Button -> Jump Entry");
+            // Serial.println("L: Wallet: Jump Button -> Jump Entry");
             currentState = STATE_JUMP_ENTRY;
             currentJumpDigitIndex = 0;
             currentJumpDigitValue = 0;
@@ -1492,18 +1524,18 @@ void loop() {
             goto end_wallet_view_logic;
         } else if (buttonLeftTriggered && currentRotationIndex > 0) {
             currentRotationIndex--;
-            Serial.printf("L: Wallet: Prev Rotation -> %d\n", currentRotationIndex);
+            // Serial.printf("L: Wallet: Prev Rotation -> %d\n", currentRotationIndex);
             walletNeedsRedraw = true;
         } else if (buttonRightTriggered) {
             currentRotationIndex = (currentRotationIndex + 1) % (MAX_ROTATION_INDEX + 1);
-            Serial.printf("L: Wallet: Next Rotation -> %d\n", currentRotationIndex);
+            // Serial.printf("L: Wallet: Next Rotation -> %d\n", currentRotationIndex);
             walletNeedsRedraw = true;
         }
 
         if (walletNeedsRedraw) {
-            Serial.printf("L: Redrawing Wallet R%d\n", currentRotationIndex);
-            Serial.print("L: Heap Before Wallet Redraw: ");
-            Serial.println(heap_caps_get_free_size(MALLOC_CAP_DEFAULT));
+            // Serial.printf("L: Redrawing Wallet R%d\n", currentRotationIndex);
+            // Serial.print("L: Heap Before Wallet Redraw: ");
+            // Serial.println(heap_caps_get_free_size(MALLOC_CAP_DEFAULT));
 
             if (loadedMnemonic.length() == 0) {
                 errorMessage = "Mnemonic Missing!";
@@ -1518,7 +1550,7 @@ void loop() {
 
             // Derive base wallet key if not already derived
             if (!hdWalletKey.isValid()) {
-                Serial.println("L: Validating mnemonic and deriving keys...");
+                // Serial.println("L: Validating mnemonic and deriving keys...");
                 if (!validateMnemonic(loadedMnemonic)) {
                     errorMessage = "Invalid Mnemonic Checksum";
                     displayErrorScreen(errorMessage);
@@ -1542,7 +1574,7 @@ void loop() {
                     currentState = STATE_ERROR;
                     break;
                 }
-                Serial.println("L: Deriving secure path...");
+                // Serial.println("L: Deriving secure path...");
                 hdWalletKey = deriveSecurePath(hdMasterKey, String(password));
                 if (!hdWalletKey.isValid()) {
                     errorMessage = "Base Wallet Derivation Failed";
@@ -1555,7 +1587,7 @@ void loop() {
                     currentState = STATE_ERROR;
                     break;
                 }
-                Serial.println("L: Base wallet path derived");
+                // Serial.println("L: Base wallet path derived");
             }
 
             // Compute rotation path segment
@@ -1571,7 +1603,7 @@ void loop() {
             uint8_t depth;
             if (cachedRotationIndex != currentRotationIndex) {
                 unsigned long startTime = millis();
-                Serial.printf("L: Cache miss (cached: %d, target: %d), deriving key\n", cachedRotationIndex, currentRotationIndex);
+                // Serial.printf("L: Cache miss (cached: %d, target: %d), deriving key\n", cachedRotationIndex, currentRotationIndex);
                 uint8_t parentFingerprint[4];
                 if (cachedRotationIndex == -1 || currentRotationIndex < cachedRotationIndex) {
                     cachedParentKey = hdWalletKey;
@@ -1609,7 +1641,7 @@ void loop() {
                 }
                 // Update previous key cache for next iteration
                 if (currentRotationIndex > 0) {
-                    Serial.printf("L: %d, %d, %d\n", currentRotationIndex, cachedRotationIndex, cachedPrevRotationIndex);
+                    // Serial.printf("L: %d, %d, %d\n", currentRotationIndex, cachedRotationIndex, cachedPrevRotationIndex);
                     cachedPrevParentKey = (currentRotationIndex == cachedRotationIndex + 1 && cachedPrevRotationIndex == cachedRotationIndex - 1) ? cachedParentKey : prevPrevParentKey;
                     cachedPrevRotationIndex = currentRotationIndex - 1;
                 } else {
@@ -1618,7 +1650,7 @@ void loop() {
                 }
                 cachedRotationIndex = currentRotationIndex;
                 cacheNeedsSave = true;
-                Serial.printf("L: Key derivation took %lu ms, final depth: %d\n", millis() - startTime, depth);
+                // Serial.printf("L: Key derivation took %lu ms, final depth: %d\n", millis() - startTime, depth);
             }
 
             HDPrivateKey currentKey = cachedParentKey;
@@ -1648,10 +1680,10 @@ void loop() {
                 unsigned long prevStartTime = millis();
                 HDPrivateKey prevParentKey;
                 if (cachedPrevRotationIndex == currentRotationIndex - 1 && cachedPrevParentKey.isValid()) {
-                    Serial.printf("L: Using cached prev key for rotation %d\n", cachedPrevRotationIndex);
+                    // Serial.printf("L: Using cached prev key for rotation %d\n", cachedPrevRotationIndex);
                     prevParentKey = prevPrevParentKey;
                 } else {
-                    Serial.printf("L: Prev cache miss (cached: %d, target: %d), deriving prev key\n", cachedPrevRotationIndex, currentRotationIndex - 1);
+                    // Serial.printf("L: Prev cache miss (cached: %d, target: %d), deriving prev key\n", cachedPrevRotationIndex, currentRotationIndex - 1);
                     prevParentKey = (cachedRotationIndex == currentRotationIndex && cachedParentKey.isValid()) ? cachedParentKey : hdWalletKey;
                     depth = prevParentKey.depth;
                     int startIndex = (prevParentKey == hdWalletKey) ? 0 : currentRotationIndex - 1;
@@ -1659,7 +1691,7 @@ void loop() {
                         unsigned long derivStart = millis();
                         prevParentKey = prevParentKey.derive(rotationPathSegment.c_str());
                         depth += 3;
-                        Serial.printf("L: Prev derivation step %d took %lu ms\n", r, millis() - derivStart);
+                        // Serial.printf("L: Prev derivation step %d took %lu ms\n", r, millis() - derivStart);
                     }
                     if (!prevParentKey.isValid()) {
                         errorMessage = "Prev Parent Key Invalid (Rotation " + String(currentRotationIndex - 1) + ")";
@@ -1682,7 +1714,7 @@ void loop() {
                     displayErrorScreen(errorMessage);
                     goto end_wallet_view_logic;
                 }
-                Serial.printf("L: Previous key derivation and address gen took %lu ms\n", millis() - prevStartTime);
+                // Serial.printf("L: Previous key derivation and address gen took %lu ms\n", millis() - prevStartTime);
             } else {
                 cachedPrevParentKey = HDPrivateKey();
                 cachedPrevRotationIndex = -1;
@@ -1725,12 +1757,12 @@ void loop() {
                         prefs.putUChar("CACHED_PREV_DEPTH", prevDepth);
                         prefs.putString("CACHED_PREV_FINGERPRINT", prevParentFingerprintHex.c_str());
                         prefs.putULong("CACHED_PREV_CHILD_NUM", indices[2]);
-                        Serial.printf("L: Saved cached prev key for rotation %d, depth %d\n", cachedPrevRotationIndex, prevDepth);
+                        // Serial.printf("L: Saved cached prev key for rotation %d, depth %d\n", cachedPrevRotationIndex, prevDepth);
                     }
                     cacheNeedsSave = false;
                     prefs.end();
                 } else {
-                    Serial.println("W: Failed to save cached keys");
+                    // Serial.println("W: Failed to save cached keys");
                 }
             }
 
@@ -1752,8 +1784,8 @@ void loop() {
                 pubKey2.compressed = false;
                 strncpy(addr_n_plus_2, keccak256Address(pubKey2, hash_n_plus_2).c_str(), sizeof(addr_n_plus_2));
                 addr_n_plus_2[sizeof(addr_n_plus_2) - 1] = '\0';
-                Serial.println("BSC Address n+1: " + String(addr_n_plus_1));
-                Serial.println("BSC Address n+2: " + String(addr_n_plus_2));
+                // Serial.println("BSC Address n+1: " + String(addr_n_plus_1));
+                // Serial.println("BSC Address n+2: " + String(addr_n_plus_2));
             } else {
                 strncpy(wif_n, currentKey.wif().c_str(), sizeof(wif_n));
                 wif_n[sizeof(wif_n) - 1] = '\0';
@@ -1762,7 +1794,7 @@ void loop() {
                 strncpy(addr_n_plus_2, twicePreRotatedKey.publicKey().address(blockchains[selectedBlockchainIndex].network).c_str(), sizeof(addr_n_plus_2));
                 addr_n_plus_2[sizeof(addr_n_plus_2) - 1] = '\0';
             }
-            Serial.printf("L: Address generation took %lu ms\n", millis() - addrStartTime);
+            // Serial.printf("L: Address generation took %lu ms\n", millis() - addrStartTime);
 
             // Validate derivations
             bool derivation_ok = true;
@@ -1788,15 +1820,15 @@ void loop() {
                 char combinedQRData[256];
                 snprintf(combinedQRData, sizeof(combinedQRData), "%s|%s|%s|%s|%d",
                         wif_n, addr_n_plus_1, addr_n_plus_2, public_key_hash_prev.c_str(), currentRotationIndex);
-                Serial.println("QR Data: " + String(combinedQRData));
-                Serial.println("QR Data Length: " + String(strlen(combinedQRData)));
+                // Serial.println("QR Data: " + String(combinedQRData));
+                // Serial.println("QR Data Length: " + String(strlen(combinedQRData)));
                 int estimatedQrVersion = 12;
                 displaySingleRotationQR(currentRotationIndex, String(combinedQRData), "Rotation", estimatedQrVersion);
             } else {
                 displayErrorScreen(error_msg_detail.length() > 0 ? error_msg_detail : "Derivation Error");
             }
-            Serial.print("L: Heap After Wallet Redraw: ");
-            Serial.println(heap_caps_get_free_size(MALLOC_CAP_DEFAULT));
+            // Serial.print("L: Heap After Wallet Redraw: ");
+            // Serial.println(heap_caps_get_free_size(MALLOC_CAP_DEFAULT));
         }
         end_wallet_view_logic:;
         break;
@@ -1805,10 +1837,10 @@ void loop() {
     case STATE_SHOW_SECRET_MNEMONIC:
       if (redrawScreen) displaySecretMnemonicScreen(loadedMnemonic);
       if (buttonLeftTriggered) {
-        Serial.println("L: Exit Secret Mnemonic screen.");
+        // Serial.println("L: Exit Secret Mnemonic screen.");
         currentState = STATE_WALLET_VIEW;
       } else if (buttonRightTriggered) {
-        Serial.println("L: Import new mnemonic from Secret screen.");
+        // Serial.println("L: Import new mnemonic from Secret screen.");
         currentState = STATE_MNEMONIC_IMPORT;
         memset(wordIndices, 0, sizeof(wordIndices));
         strcpy(currentWordBuffer, "");
@@ -1820,21 +1852,21 @@ void loop() {
     case STATE_JUMP_ENTRY:
       if (redrawScreen) {
           showJumpEntryScreen();
-          Serial.println("L: Jump Entry Screen Redrawn");
+          // Serial.println("L: Jump Entry Screen Redrawn");
       }
       if (buttonLeftTriggered) {
           currentJumpDigitValue = (currentJumpDigitValue + 1) % 10;
           showJumpEntryScreen();
-          Serial.printf("L: Jump Digit cycled to %d at index %d\n", currentJumpDigitValue, currentJumpDigitIndex);
+          // Serial.printf("L: Jump Digit cycled to %d at index %d\n", currentJumpDigitValue, currentJumpDigitIndex);
       } else if (buttonRightTriggered) {
-          Serial.printf("L: Jump Right Button (Next/OK) Pressed at digit index %d\n", currentJumpDigitIndex);
+          // Serial.printf("L: Jump Right Button (Next/OK) Pressed at digit index %d\n", currentJumpDigitIndex);
           jumpIndex[currentJumpDigitIndex] = currentJumpDigitValue + '0';
           currentJumpDigitIndex++;
           currentJumpDigitValue = 0;
           if (currentJumpDigitIndex >= JUMP_INDEX_LENGTH) {
               jumpIndex[JUMP_INDEX_LENGTH] = '\0';
-              Serial.print("L: Full Jump Index Entered: ");
-              Serial.println(jumpIndex);
+              // Serial.print("L: Full Jump Index Entered: ");
+              // Serial.println(jumpIndex);
               int newRotationIndex = 0;
               for (int i = 0; i < JUMP_INDEX_LENGTH; i++) {
                   if (jumpIndex[i] >= '0' && jumpIndex[i] <= '9') {
@@ -1846,13 +1878,13 @@ void loop() {
               }
               if (newRotationIndex >= 0 && newRotationIndex <= MAX_ROTATION_INDEX) {
                   currentRotationIndex = newRotationIndex;
-                  Serial.printf("L: Jump to Rotation Index %d\n", currentRotationIndex);
+                  // Serial.printf("L: Jump to Rotation Index %d\n", currentRotationIndex);
                   // Invalidate cache to force re-derivation
                   cachedRotationIndex = -1;
                   currentState = STATE_WALLET_VIEW;
               } else {
                   errorMessage = "Invalid Rotation Index";
-                  Serial.println("E: " + errorMessage);
+                  // Serial.println("E: " + errorMessage);
                   displayErrorScreen(errorMessage);
                   currentState = STATE_ERROR;
                   currentJumpDigitIndex = 0;
@@ -1862,14 +1894,14 @@ void loop() {
               }
           } else {
               showJumpEntryScreen();
-              Serial.printf("L: Jump Digit entered, index now %d\n", currentJumpDigitIndex);
+              // Serial.printf("L: Jump Digit entered, index now %d\n", currentJumpDigitIndex);
           }
       }
       break;
 
     case STATE_ERROR:
       if (buttonLeftTriggered) {
-        Serial.println("L: Error Acknowledged.");
+        // Serial.println("L: Error Acknowledged.");
         currentState = STATE_WALLET_TYPE_SELECTION; // Return to wallet type selection
         currentDigitIndex = 0;
         currentDigitValue = 0;
@@ -1882,7 +1914,7 @@ void loop() {
       break;
 
     default:
-      Serial.printf("E: Unknown State %d\n", currentState);
+      // Serial.printf("E: Unknown State %d\n", currentState);
       errorMessage = "Unknown State Error";
       displayErrorScreen(errorMessage);
       currentState = STATE_WALLET_TYPE_SELECTION; // Revert to wallet type selection on error

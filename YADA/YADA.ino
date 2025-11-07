@@ -703,7 +703,7 @@ void showPasswordEntryScreen() {
   tft.setTextSize(2);
   tft.drawString("Enter Wallet Password", tft.width() / 2, 30);
   int digitBoxSize = 25;
-  int spacing = 8;
+  int spacing = 6;
   int totalW = PIN_LENGTH * digitBoxSize + (PIN_LENGTH - 1) * spacing;
   int startX = (tft.width() - totalW) / 2;
   int digitY = 80;
@@ -787,13 +787,19 @@ void showJumpEntryScreen() {
   if (currentJumpDigitIndex == JUMP_INDEX_LENGTH - 1) {
     strcpy(nextLabel, "OK");
   }
-  int leftButtonCenterX = 65;
-  int leftButtonCenterY = 205;
+  int buttonCenterY = 205;
+  // Draw split buttons for decrement and increment (horizontal split on bottom left)
+  int decButtonCenterX = 40;
+  int incButtonCenterX = 90;
+  buttons[BTN_DECREMENT].initButton(&tft, decButtonCenterX, buttonCenterY, SPLIT_BUTTON_W, BUTTON_H, TFT_WHITE, TFT_BLUE, TFT_BLACK, "<", 2);
+  buttons[BTN_DECREMENT].drawButton();
+  buttons[BTN_INCREMENT].initButton(&tft, incButtonCenterX, buttonCenterY, SPLIT_BUTTON_W, BUTTON_H, TFT_WHITE, TFT_BLUE, TFT_BLACK, ">", 2);
+  buttons[BTN_INCREMENT].drawButton();
+  // Draw single right button for Next/OK
   int rightButtonCenterX = 255;
   int rightButtonCenterY = 205;
-  buttons[BTN_CYCLE].initButton(&tft, leftButtonCenterX, leftButtonCenterY, BUTTON_W, BUTTON_H, TFT_WHITE, TFT_BLUE, TFT_BLACK, "Cycle", 2);
   buttons[BTN_NEXT].initButton(&tft, rightButtonCenterX, rightButtonCenterY, BUTTON_W, BUTTON_H, TFT_WHITE, TFT_GREEN, TFT_BLACK, nextLabel, 2);
-  drawButtons(2);
+  buttons[BTN_NEXT].drawButton();
 }
 
 void showWalletTypeSelectionScreen() {
@@ -1503,6 +1509,7 @@ void loop() {
           // Serial.printf("L: Right Button (Next) Pressed at digit index %d\n", currentDigitIndex);
           password[currentDigitIndex] = charsetModes[currentCharsetMode][currentCharIndex];
           currentDigitIndex++;
+          currentCharIndex = 0;  // Reset character index to 0 for the new digit
           if (currentDigitIndex >= PIN_LENGTH) {
               password[PIN_LENGTH] = '\0';
               // Serial.print("L: Full Password Entered via Next button: ");
@@ -1897,10 +1904,14 @@ void loop() {
           showJumpEntryScreen();
           // Serial.println("L: Jump Entry Screen Redrawn");
       }
-      if (buttonLeftTriggered) {
+      if (buttonDecrementTriggered) {
+          currentJumpDigitValue = (currentJumpDigitValue + 9) % 10;
+          showJumpEntryScreen();
+          // Serial.printf("L: Jump Digit decremented to %d at index %d\n", currentJumpDigitValue, currentJumpDigitIndex);
+      } else if (buttonIncrementTriggered) {
           currentJumpDigitValue = (currentJumpDigitValue + 1) % 10;
           showJumpEntryScreen();
-          // Serial.printf("L: Jump Digit cycled to %d at index %d\n", currentJumpDigitValue, currentJumpDigitIndex);
+          // Serial.printf("L: Jump Digit incremented to %d at index %d\n", currentJumpDigitValue, currentJumpDigitIndex);
       } else if (buttonRightTriggered) {
           // Serial.printf("L: Jump Right Button (Next/OK) Pressed at digit index %d\n", currentJumpDigitIndex);
           jumpIndex[currentJumpDigitIndex] = currentJumpDigitValue + '0';

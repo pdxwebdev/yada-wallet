@@ -12,6 +12,8 @@
 #include <arpa/inet.h>     // For ntohl (Network to Host Long for endianness handling)
 #include <string.h>        // For memcpy
 #include <keccak.h>
+#include <bech32.h>  // You need this! From: https://github.com/sipa/bech32 (ref/bech32.h + bech32.cpp)
+#include <Hash.h>  // For hash160() utility
 
 // --- TFT & Touch Libraries ---
 #include <SPI.h>
@@ -76,7 +78,8 @@ struct BlockchainConfig {
 
 BlockchainConfig blockchains[] = {
   {"YadaCoin", 0, &Mainnet}, // YadaCoin uses Bitcoin-style Mainnet
-  {"BSC", 1, &Mainnet}   // BSC with custom network
+  {"BSC", 1, &Mainnet},   // BSC with custom network
+  {"Bitcoin",  84, &Mainnet}       // BIP84: m/84'/0'/0' → bech32 bc1
 };
 
 const int NUM_BLOCKCHAINS = sizeof(blockchains) / sizeof(blockchains[0]);
@@ -194,6 +197,29 @@ bool isValidWord(const char* wordStr, uint16_t& index) {
   return false;
 }
 
+std::vector<uint8_t> convertBits(const uint8_t* in, size_t inLen, int fromBits, int toBits, bool pad) {
+  std::vector<uint8_t> ret;
+  uint32_t acc = 0;
+  uint32_t bits = 0;
+  const int maxv = (1 << toBits) - 1;
+  const int max_acc = (1 << (fromBits + toBits - 1)) - 1;
+  for (size_t i = 0; i < inLen; ++i) {
+    uint8_t value = in[i];
+    acc = ((acc << fromBits) | value) & max_acc;
+    bits += fromBits;
+    while (bits >= toBits) {
+      bits -= toBits;
+      ret.push_back((acc >> bits) & maxv);
+    }
+  }
+  if (pad) {
+    if (bits) ret.push_back(acc << (toBits - bits) & maxv);
+  } else if (bits >= fromBits || ((acc << (toBits - bits)) & maxv)) {
+    return std::vector<uint8_t>();
+  }
+  return ret;
+}
+
 String keccak256Address(const PublicKey& key, unsigned char* output) {
     uint8_t input[64];
     String keyHex = key.toString(); // Should return uncompressed key
@@ -286,6 +312,45 @@ String keccak256Address(const PublicKey& key, unsigned char* output) {
     // Serial.println(heap_caps_get_free_size(MALLOC_CAP_DEFAULT));
     
     return checksumAddress;
+}
+
+String bech32Address(const PublicKey& pubKey) {
+  // Get compressed public key as hex string (66 chars: 02/03 + 64 hex bytes)
+  String compressedHex = pubKey.toString();
+  if (compressedHex.length() != 66 || (compressedHex.substring(0, 2) != "02" && compressedHex.substring(0, 2) != "03")) {
+    return "";  // Invalid compressed pubkey
+  }
+
+  // Convert hex to bytes
+  uint8_t pubBytes[33];
+  hexToBytes(compressedHex, pubBytes, 33);
+
+  // Use uBitcoin's built-in hash160: RIPEMD160(SHA256(pubBytes))
+  uint8_t hash160Bytes[20];
+  hash160(pubBytes, 33, hash160Bytes);  // <-- This is the magic line!
+
+  // Convert 8-bit to 5-bit for bech32 (standard conversion)
+  std::vector<uint8_t> data5;
+  uint32_t acc = 0;
+  int bits = 0;
+  for (int i = 0; i < 20; ++i) {
+    acc = (acc << 8) | hash160Bytes[i];
+    bits += 8;
+    while (bits >= 5) {
+      bits -= 5;
+      data5.push_back((acc >> bits) & 0x1F);
+    }
+  }
+  if (bits > 0) {
+    data5.push_back((acc << (5 - bits)) & 0x1F);
+  }
+
+  // Prepend witness version 0 (for bc1q...)
+  data5.insert(data5.begin(), 0);
+
+  // Encode as bech32
+  std::string addrStr = bech32::encode("bc", data5, bech32::Encoding::BECH32);
+  return String(addrStr.c_str());
 }
 
 bool validateMnemonic(const String& mnemonic) {
@@ -1004,7 +1069,7 @@ void readButtons() {
     TS_Point p = ts.getPoint();
     t_x = map(p.y, 338, 3739, tft.width(), 0);
     t_y = map(p.x, 414, 3857, tft.height(), 0);
-    // Serial.printf("L: Touch at (%d, %d)\n", t_x, t_y);
+    Serial.printf("L: Touch at (%d, %d)\n", t_x, t_y);
     if (!touchIsBeingHeld) {
       touchIsBeingHeld = true;
       touchHoldStartTime = millis();
@@ -1566,8 +1631,6 @@ void loop() {
             currentState = STATE_JUMP_ENTRY;
             currentJumpDigitIndex = 0;
             currentJumpDigitValue = 0;
-            memset(jumpIndex, '_', JUMP_INDEX_LENGTH);
-            jumpIndex[JUMP_INDEX_LENGTH] = '\0';
             goto end_wallet_view_logic;
         } else if (buttonLeftTriggered && currentRotationIndex > 0) {
             currentRotationIndex--;
@@ -1751,14 +1814,20 @@ void loop() {
                     cachedPrevParentKey = prevParentKey;
                     cachedPrevRotationIndex = currentRotationIndex - 1;
                 }
-                PublicKey prevPublicKey = prevParentKey.publicKey();
-                if (String(blockchains[selectedBlockchainIndex].name) == "BSC") {
-                    prevPublicKey.compressed = false;
+
+                // ONLY CHANGE: Bitcoin uses bech32 instead of legacy address
+                const char* chainName = blockchains[selectedBlockchainIndex].name;
+                if (strcmp(chainName, "Bitcoin") == 0) {
+                    public_key_hash_prev = bech32Address(prevParentKey.publicKey());
+                } else if (strcmp(chainName, "BSC") == 0) {
+                    PublicKey prevPub = prevParentKey.publicKey();
+                    prevPub.compressed = false;
                     unsigned char hash_n_minus_1[32];
-                    public_key_hash_prev = keccak256Address(prevPublicKey, hash_n_minus_1);
+                    public_key_hash_prev = keccak256Address(prevPub, hash_n_minus_1);
                 } else {
-                    public_key_hash_prev = prevPublicKey.address(blockchains[selectedBlockchainIndex].network);
+                    public_key_hash_prev = prevParentKey.publicKey().address(blockchains[selectedBlockchainIndex].network);
                 }
+
                 if (public_key_hash_prev.length() == 0) {
                     errorMessage = "Prev Address Gen Error";
                     displayErrorScreen(errorMessage);
@@ -1816,14 +1885,24 @@ void loop() {
                 }
             }
 
-            // Generate addresses
+            // Generate addresses — ONLY CHANGE HERE: Bitcoin uses bech32
             unsigned long addrStartTime = millis();
             char wif_n[64];
             char addr_n_plus_1[44];
             char addr_n_plus_2[44];
-            if (String(blockchains[selectedBlockchainIndex].name) == "BSC") {
-                strncpy(wif_n, currentKey.wif().c_str(), sizeof(wif_n));
-                wif_n[sizeof(wif_n) - 1] = '\0';
+            const char* chainName = blockchains[selectedBlockchainIndex].name;
+            strncpy(wif_n, currentKey.wif().c_str(), sizeof(wif_n));
+
+            if (strcmp(chainName, "Bitcoin") == 0) {
+                wif_n[sizeof(wif_n)-1] = '\0';
+
+                String nextAddr1 = bech32Address(preRotatedKey.publicKey());
+                String nextAddr2 = bech32Address(twicePreRotatedKey.publicKey());
+                strncpy(addr_n_plus_1, nextAddr1.c_str(), sizeof(addr_n_plus_1)-1);
+                strncpy(addr_n_plus_2, nextAddr2.c_str(), sizeof(addr_n_plus_2)-1);
+                addr_n_plus_1[sizeof(addr_n_plus_1)-1] = '\0';
+                addr_n_plus_2[sizeof(addr_n_plus_2)-1] = '\0';
+            } else if (strcmp(chainName, "BSC") == 0) {
                 unsigned char hash_n_plus_1[32];
                 unsigned char hash_n_plus_2[32];
                 PublicKey pubKey1 = preRotatedKey.publicKey();
@@ -1837,7 +1916,6 @@ void loop() {
                 // Serial.println("BSC Address n+1: " + String(addr_n_plus_1));
                 // Serial.println("BSC Address n+2: " + String(addr_n_plus_2));
             } else {
-                strncpy(wif_n, currentKey.wif().c_str(), sizeof(wif_n));
                 wif_n[sizeof(wif_n) - 1] = '\0';
                 strncpy(addr_n_plus_1, preRotatedKey.publicKey().address(blockchains[selectedBlockchainIndex].network).c_str(), sizeof(addr_n_plus_1));
                 addr_n_plus_1[sizeof(addr_n_plus_1) - 1] = '\0';

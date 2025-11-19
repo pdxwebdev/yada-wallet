@@ -61,6 +61,7 @@ TFT_eSPI_Button buttons[MAX_BUTTONS];
 #define BTN_DECREMENT 4
 #define BTN_INCREMENT 5
 #define BTN_CHARSET 6
+#define BTN_SOLO   4   // New button ID
 
 // --- Blockchain Configuration ---
 const Network BSCNetwork = {
@@ -108,8 +109,11 @@ bool buttonDecrementTriggered = false;
 bool buttonIncrementTriggered = false;
 bool buttonConfirmTriggered = false;
 bool buttonCharsetTriggered = false;
+bool buttonSoloTriggered = false;
+
 unsigned long touchHoldStartTime = 0;
 bool touchIsBeingHeld = false;
+bool soloMode = false;  
 
 // --- State Variables ---
 enum AppState {
@@ -1003,6 +1007,10 @@ void displaySingleRotationQR(int rIdx, const String& combinedQRData, const Strin
   int qrDrawSize = qr.size * pixelSize;
   int startX = sideMargin + (availableWidth - qrDrawSize) / 2;
   int startY = topMargin + titleHeight + (availableHeight - qrDrawSize) / 2;
+  if (soloMode) {
+      tft.setTextSize(1);
+      tft.drawString("SOLO KEY", tft.width()/2, topMargin+15, 2);
+  }
   tft.setTextDatum(TC_DATUM);
   tft.setTextSize(1);
   String tit = String(blockchains[selectedBlockchainIndex].name) + ": " + String(rIdx);
@@ -1023,11 +1031,17 @@ void displaySingleRotationQR(int rIdx, const String& combinedQRData, const Strin
   int secretButtonCenterY = (SECRET_BUTTON_SIZE / 2) + 5;
   int jumpButtonCenterX = tft.width() - (SECRET_BUTTON_SIZE / 2) - 5;
   int jumpButtonCenterY = (SECRET_BUTTON_SIZE / 2) + 5 + SECRET_BUTTON_SIZE + 5;
+  int soloButtonCenterY   = jumpButtonCenterY + SECRET_BUTTON_SIZE + 5;   // <-- new line
   buttons[BTN_LEFT].initButton(&tft, leftButtonCenterX, leftButtonCenterY, BUTTON_W, BUTTON_H, TFT_WHITE, TFT_BLUE, TFT_BLACK, "< Prev", 2);
   buttons[BTN_RIGHT].initButton(&tft, rightButtonCenterX, rightButtonCenterY, BUTTON_W, BUTTON_H, TFT_WHITE, TFT_BLUE, TFT_BLACK, "Next >", 2);
   buttons[BTN_SECRET].initButton(&tft, secretButtonCenterX, secretButtonCenterY, SECRET_BUTTON_SIZE, SECRET_BUTTON_SIZE, TFT_WHITE, TFT_ORANGE, TFT_BLACK, "Seed", 1);
   buttons[BTN_JUMP].initButton(&tft, jumpButtonCenterX, jumpButtonCenterY, SECRET_BUTTON_SIZE, SECRET_BUTTON_SIZE, TFT_WHITE, TFT_CYAN, TFT_BLACK, "Jump", 1);
-  drawButtons(4);
+  char soloLabel[] = "Key";  // mutable buffer
+  buttons[BTN_SOLO].initButton(&tft, jumpButtonCenterX, soloButtonCenterY,
+      SECRET_BUTTON_SIZE, SECRET_BUTTON_SIZE,
+      TFT_WHITE, soloMode ? TFT_GREEN : TFT_MAGENTA,
+      TFT_BLACK, soloLabel, 1);
+  drawButtons(5);
   free(qrDataBuffer);
 }
 
@@ -1045,7 +1059,9 @@ void readButtons() {
   static bool wasNextPressedState = false;
   static bool wasOkPressedState = false;
   static bool wasCharsetPressedState = false;
+  static bool wasSoloPressedState = false;
   static unsigned long lastTouchTime = 0;
+  static unsigned long lastSoloTouchTime = 0;  // ← NEW LINE
   const unsigned long debounceDelay = 200;
   buttonLeftTriggered = false;
   buttonRightTriggered = false;
@@ -1055,6 +1071,7 @@ void readButtons() {
   buttonIncrementTriggered = false;
   buttonConfirmTriggered = false;
   buttonCharsetTriggered = false;
+  buttonSoloTriggered = false;
   bool pressed = ts.tirqTouched() && ts.touched();
   bool currentLeftContainsManual = false;
   bool currentRightContainsManual = false;
@@ -1065,6 +1082,7 @@ void readButtons() {
   bool currentNextContainsManual = false;
   bool currentOkContainsManual = false;
   bool currentCharsetContainsManual = false;
+  bool currentSoloContainsManual = false;
   if (pressed) {
     TS_Point p = ts.getPoint();
     t_x = map(p.y, 338, 3739, tft.width(), 0);
@@ -1115,45 +1133,33 @@ void readButtons() {
       currentJumpContainsManual = true;
       // Serial.println("L: Touch in Jump Button");
     }
+    int soloBtnL = 170, soloBtnR = 214, soloBtnT = 2, soloBtnB = 38;
+    if (t_x >= soloBtnL && t_x <= soloBtnR && t_y >= soloBtnT && t_y <= soloBtnB) {
+        currentSoloContainsManual = true;
+      Serial.println("L: Touch in Solo Button");
+    }
   } else {
+
+    // --- ALL OTHER BUTTONS (unchanged) ---
     if (touchIsBeingHeld && (millis() - lastTouchTime > debounceDelay)) {
       touchIsBeingHeld = false;
-      if (wasLeftPressedState) {
-        buttonLeftTriggered = true;
-        // Serial.println("L: Left Button Triggered");
-      }
-      if (wasRightPressedState) {
-        buttonRightTriggered = true;
-        // Serial.println("L: Right Button Triggered");
-      }
-      if (wasSecretPressedState) {
-        buttonSecretTriggered = true;
-        // Serial.println("L: Secret Button Triggered");
-      }
-      if (wasJumpPressedState) {
-        buttonJumpTriggered = true;
-        // Serial.println("L: Jump Button Triggered");
-      }
-      if (wasDecPressedState) {
-        buttonDecrementTriggered = true;
-        // Serial.println("L: Decrement Button Triggered");
-      }
-      if (wasIncPressedState) {
-        buttonIncrementTriggered = true;
-        // Serial.println("L: Increment Button Triggered");
-      }
-      if (wasCharsetPressedState) {
-        buttonCharsetTriggered = true;
-      }
-      if (wasNextPressedState || wasOkPressedState) {
-        buttonRightTriggered = true;
-      }
-      if (wasOkPressedState) {
-        buttonConfirmTriggered = true;
-      }
+      if (wasLeftPressedState)  buttonLeftTriggered = true;
+      if (wasRightPressedState) buttonRightTriggered = true;
+      if (wasSecretPressedState) buttonSecretTriggered = true;
+      if (wasJumpPressedState) buttonJumpTriggered = true;
+      if (wasDecPressedState) buttonDecrementTriggered = true;
+      if (wasIncPressedState) buttonIncrementTriggered = true;
+      if (wasCharsetPressedState) buttonCharsetTriggered = true;
+      if (wasNextPressedState || wasOkPressedState) buttonRightTriggered = true;
+      if (wasOkPressedState) buttonConfirmTriggered = true;
       lastTouchTime = millis();
     }
   }
+  if (wasSoloPressedState && !currentSoloContainsManual) {
+    buttonSoloTriggered = true;
+    Serial.println("SOLO BUTTON ACTIVATED!");
+  }
+  wasSoloPressedState = currentSoloContainsManual;
   wasLeftPressedState = currentLeftContainsManual;
   wasRightPressedState = currentRightContainsManual;
   wasSecretPressedState = currentSecretContainsManual;
@@ -1309,6 +1315,7 @@ void loop() {
     buttonIncrementTriggered = false;
     buttonConfirmTriggered = false;
     buttonCharsetTriggered = false;
+    buttonSoloTriggered = false;
     touchIsBeingHeld = false;
   }
   if (firstLoop) {
@@ -1636,6 +1643,9 @@ void loop() {
             currentRotationIndex--;
             // Serial.printf("L: Wallet: Prev Rotation -> %d\n", currentRotationIndex);
             walletNeedsRedraw = true;
+        } else if (buttonSoloTriggered) {
+            soloMode = !soloMode;
+            walletNeedsRedraw = true;   
         } else if (buttonRightTriggered) {
             currentRotationIndex = (currentRotationIndex + 1) % (MAX_ROTATION_INDEX + 1);
             // Serial.printf("L: Wallet: Next Rotation -> %d\n", currentRotationIndex);
@@ -1950,6 +1960,25 @@ void loop() {
                         wif_n, addr_n_plus_1, addr_n_plus_2, public_key_hash_prev.c_str(), currentRotationIndex);
                 // Serial.println("QR Data: " + String(combinedQRData));
                 // Serial.println("QR Data Length: " + String(strlen(combinedQRData)));
+                if (soloMode) {
+                    const char* chainName = blockchains[selectedBlockchainIndex].name;
+                    if (strcmp(chainName, "BSC") == 0) {
+                        // BSC → raw 64-hex private key
+                        uint8_t secret[32];
+                        currentKey.getSecret(secret);
+                        snprintf(combinedQRData, sizeof(combinedQRData), "%s",
+                                bytesToHex(secret, 32).c_str());
+                    } else {
+                        // Bitcoin / YadaCoin → just the WIF
+                        snprintf(combinedQRData, sizeof(combinedQRData), "%s",
+                                currentKey.wif().c_str());
+                    }
+                } else {
+                    // original combined payload
+                    snprintf(combinedQRData, sizeof(combinedQRData), "%s|%s|%s|%s|%d",
+                            wif_n, addr_n_plus_1, addr_n_plus_2,
+                            public_key_hash_prev.c_str(), currentRotationIndex);
+                }
                 int estimatedQrVersion = 12;
                 displaySingleRotationQR(currentRotationIndex, String(combinedQRData), "Rotation", estimatedQrVersion);
             } else {

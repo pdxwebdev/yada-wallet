@@ -1087,7 +1087,7 @@ void readButtons() {
     TS_Point p = ts.getPoint();
     t_x = map(p.y, 338, 3739, tft.width(), 0);
     t_y = map(p.x, 414, 3857, tft.height(), 0);
-    Serial.printf("L: Touch at (%d, %d)\n", t_x, t_y);
+    //Serial.printf("L: Touch at (%d, %d)\n", t_x, t_y);
     if (!touchIsBeingHeld) {
       touchIsBeingHeld = true;
       touchHoldStartTime = millis();
@@ -1136,7 +1136,7 @@ void readButtons() {
     int soloBtnL = 170, soloBtnR = 214, soloBtnT = 2, soloBtnB = 38;
     if (t_x >= soloBtnL && t_x <= soloBtnR && t_y >= soloBtnT && t_y <= soloBtnB) {
         currentSoloContainsManual = true;
-      Serial.println("L: Touch in Solo Button");
+      //Serial.println("L: Touch in Solo Button");
     }
   } else {
 
@@ -1157,7 +1157,7 @@ void readButtons() {
   }
   if (wasSoloPressedState && !currentSoloContainsManual) {
     buttonSoloTriggered = true;
-    Serial.println("SOLO BUTTON ACTIVATED!");
+    //Serial.println("SOLO BUTTON ACTIVATED!");
   }
   wasSoloPressedState = currentSoloContainsManual;
   wasLeftPressedState = currentLeftContainsManual;

@@ -367,13 +367,13 @@ void printHex(const char* label, const uint8_t* data, size_t len) {
 
 // Full Taproot address derivation (key-path-only)
 String getTaprootAddress(const HDPrivateKey& hdKey) {
-    Serial.println("=== getTaprootAddress() — BIP-341 Key-Path (100% Correct) ===");
+    // Serial.println("=== getTaprootAddress() — BIP-341 Key-Path (100% Correct) ===");
 
     // 1. Get compressed pubkey
     PublicKey fullPub = hdKey.publicKey();
     String pubHex = fullPub.toString();
-    Serial.print("Compressed pubkey: ");
-    Serial.println(pubHex);
+    // Serial.print("Compressed pubkey: ");
+    // Serial.println(pubHex);
 
     uint8_t compressed[33];
     for (int i = 0; i < 33; i++) {
@@ -382,7 +382,7 @@ String getTaprootAddress(const HDPrivateKey& hdKey) {
 
     // 2. Force even Y on internal key
     if (compressed[0] == 0x03) {
-        Serial.println("   Y odd → negating private key for even internal key");
+        // Serial.println("   Y odd → negating private key for even internal key");
         uint8_t secret[32];
         hdKey.getSecret(secret);
         secp256k1_ec_privkey_negate(secp, secret);
@@ -438,8 +438,8 @@ String getTaprootAddress(const HDPrivateKey& hdKey) {
     std::vector<uint8_t> words = convertBits(finalXOnly, 32, 8, 5, true);
     words.insert(words.begin(), 1);
     std::string addr = bech32::encode("bc", words, bech32::Encoding::BECH32M);
-    Serial.print("Final Taproot address:  ");
-    Serial.println(addr.c_str());
+    // Serial.print("Final Taproot address:  ");
+    // Serial.println(addr.c_str());
 
     return String(addr.c_str());
 }

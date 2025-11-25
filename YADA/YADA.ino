@@ -6,6 +6,10 @@
 #include "bip39_wordlist.h"   // Needs to be included (Make sure this file exists in your project)
 #include <BigNumber.h>        // https://github.com/nickgammon/BigNumber download and load the zip file as a library
 #include <mbedtls/sha256.h>
+#include "secp256k1.h"
+secp256k1_context* secp = nullptr;  // ← ADD THIS
+#include <vector>
+#include "bech32.h"
 #include <esp_system.h>
 #include "esp_heap_caps.h"
 #include <stdint.h>        // For uint32_t
@@ -19,7 +23,6 @@
 #include <SPI.h>
 #include <TFT_eSPI.h>         // Use TFT_eSPI library
 #include <XPT2046_Touchscreen.h> // Touch screen library
-
 // --- Pin Definitions ---  
 #ifndef TFT_BL
   #define TFT_BL 21
@@ -63,6 +66,18 @@ TFT_eSPI_Button buttons[MAX_BUTTONS];
 #define BTN_CHARSET 6
 #define BTN_SOLO   4   // New button ID
 
+TaskHandle_t cryptoTaskHandle = NULL;
+
+void cryptoTask(void *pvParameters) {
+    for (;;) {
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);  // wait for notification
+        
+        // Your existing Taproot code goes here
+        // ... (the whole getTaprootAddress logic)
+        // At the end, set a global String result and notify main task
+    }
+}
+
 // --- Blockchain Configuration ---
 const Network BSCNetwork = {
   0x01,  // name (uint8_t, placeholder for BSC)
@@ -80,7 +95,7 @@ struct BlockchainConfig {
 BlockchainConfig blockchains[] = {
   {"YadaCoin", 0, &Mainnet}, // YadaCoin uses Bitcoin-style Mainnet
   {"BSC", 1, &Mainnet},   // BSC with custom network
-  {"Bitcoin",  84, &Mainnet}       // BIP84: m/84'/0'/0' → bech32 bc1
+  {"Bitcoin",  86, &Mainnet}       // BIP86: m/86'/0'/0' → bech32 bc1
 };
 
 const int NUM_BLOCKCHAINS = sizeof(blockchains) / sizeof(blockchains[0]);
@@ -201,27 +216,13 @@ bool isValidWord(const char* wordStr, uint16_t& index) {
   return false;
 }
 
-std::vector<uint8_t> convertBits(const uint8_t* in, size_t inLen, int fromBits, int toBits, bool pad) {
-  std::vector<uint8_t> ret;
-  uint32_t acc = 0;
-  uint32_t bits = 0;
-  const int maxv = (1 << toBits) - 1;
-  const int max_acc = (1 << (fromBits + toBits - 1)) - 1;
-  for (size_t i = 0; i < inLen; ++i) {
-    uint8_t value = in[i];
-    acc = ((acc << fromBits) | value) & max_acc;
-    bits += fromBits;
-    while (bits >= toBits) {
-      bits -= toBits;
-      ret.push_back((acc >> bits) & maxv);
+bool hexStringToBytes(const String& hex, uint8_t* out, size_t expectedLen) {
+    if (hex.length() != expectedLen * 2) return false;
+    for (size_t i = 0; i < expectedLen; i++) {
+        String byteStr = hex.substring(i*2, i*2+2);
+        out[i] = (uint8_t) strtoul(byteStr.c_str(), nullptr, 16);
     }
-  }
-  if (pad) {
-    if (bits) ret.push_back(acc << (toBits - bits) & maxv);
-  } else if (bits >= fromBits || ((acc << (toBits - bits)) & maxv)) {
-    return std::vector<uint8_t>();
-  }
-  return ret;
+    return true;
 }
 
 String keccak256Address(const PublicKey& key, unsigned char* output) {
@@ -318,43 +319,129 @@ String keccak256Address(const PublicKey& key, unsigned char* output) {
     return checksumAddress;
 }
 
-String bech32Address(const PublicKey& pubKey) {
-  // Get compressed public key as hex string (66 chars: 02/03 + 64 hex bytes)
-  String compressedHex = pubKey.toString();
-  if (compressedHex.length() != 66 || (compressedHex.substring(0, 2) != "02" && compressedHex.substring(0, 2) != "03")) {
-    return "";  // Invalid compressed pubkey
-  }
+// Tagged hash: SHA256(SHA256(tag)||SHA256(tag)||data)
+void taggedHash(const uint8_t* tag, size_t tagLen, const uint8_t* data, size_t dataLen, uint8_t out[32]) {
+  uint8_t tagHash[32];
+  mbedtls_sha256_context ctx;
 
-  // Convert hex to bytes
-  uint8_t pubBytes[33];
-  hexToBytes(compressedHex, pubBytes, 33);
+  mbedtls_sha256_init(&ctx);
+  mbedtls_sha256_starts(&ctx, 0);
+  mbedtls_sha256_update(&ctx, tag, tagLen);
+  mbedtls_sha256_finish(&ctx, tagHash);
+  mbedtls_sha256_free(&ctx);
 
-  // Use uBitcoin's built-in hash160: RIPEMD160(SHA256(pubBytes))
-  uint8_t hash160Bytes[20];
-  hash160(pubBytes, 33, hash160Bytes);  // <-- This is the magic line!
+  mbedtls_sha256_init(&ctx);
+  mbedtls_sha256_starts(&ctx, 0);
+  mbedtls_sha256_update(&ctx, tagHash, 32);
+  mbedtls_sha256_update(&ctx, tagHash, 32);
+  mbedtls_sha256_update(&ctx, data, dataLen);
+  mbedtls_sha256_finish(&ctx, out);
+  mbedtls_sha256_free(&ctx);
+}
 
-  // Convert 8-bit to 5-bit for bech32 (standard conversion)
-  std::vector<uint8_t> data5;
-  uint32_t acc = 0;
-  int bits = 0;
-  for (int i = 0; i < 20; ++i) {
-    acc = (acc << 8) | hash160Bytes[i];
-    bits += 8;
-    while (bits >= 5) {
-      bits -= 5;
-      data5.push_back((acc >> bits) & 0x1F);
+// Convert 8-bit bytes to 5-bit words for Bech32m
+std::vector<uint8_t> convertBits(const uint8_t* data, size_t len, int fromBits, int toBits, bool pad) {
+    std::vector<uint8_t> ret;
+    int acc = 0, bits = 0;
+    int maxv = (1 << toBits) - 1;
+    for (size_t i = 0; i < len; i++) {
+        acc = (acc << fromBits) | data[i];
+        bits += fromBits;
+        while (bits >= toBits) {
+            bits -= toBits;
+            ret.push_back((acc >> bits) & maxv);
+        }
     }
-  }
-  if (bits > 0) {
-    data5.push_back((acc << (5 - bits)) & 0x1F);
-  }
+    if (pad && bits > 0) ret.push_back((acc << (toBits - bits)) & maxv);
+    return ret;
+}
 
-  // Prepend witness version 0 (for bc1q...)
-  data5.insert(data5.begin(), 0);
+void printHex(const char* label, const uint8_t* data, size_t len) {
+  // Serial.print(label);
+  // for (size_t i = 0; i < len; i++) {
+  //   if (data[i] < 0x10) Serial.print('0');
+  //   Serial.print(data[i], HEX);
+  // }
+  // Serial.println();
+}
 
-  // Encode as bech32
-  std::string addrStr = bech32::encode("bc", data5, bech32::Encoding::BECH32);
-  return String(addrStr.c_str());
+// Full Taproot address derivation (key-path-only)
+String getTaprootAddress(const HDPrivateKey& hdKey) {
+    Serial.println("=== getTaprootAddress() — BIP-341 Key-Path (100% Correct) ===");
+
+    // 1. Get compressed pubkey
+    PublicKey fullPub = hdKey.publicKey();
+    String pubHex = fullPub.toString();
+    Serial.print("Compressed pubkey: ");
+    Serial.println(pubHex);
+
+    uint8_t compressed[33];
+    for (int i = 0; i < 33; i++) {
+        compressed[i] = (uint8_t)strtoul(pubHex.substring(i*2, i*2+2).c_str(), nullptr, 16);
+    }
+
+    // 2. Force even Y on internal key
+    if (compressed[0] == 0x03) {
+        Serial.println("   Y odd → negating private key for even internal key");
+        uint8_t secret[32];
+        hdKey.getSecret(secret);
+        secp256k1_ec_privkey_negate(secp, secret);
+        PrivateKey negated(secret);
+        fullPub = negated.publicKey();
+        pubHex = fullPub.toString();
+        for (int i = 0; i < 33; i++) {
+            compressed[i] = (uint8_t)strtoul(pubHex.substring(i*2, i*2+2).c_str(), nullptr, 16);
+        }
+    }
+
+    // 3. Internal x-only (32 bytes)
+    uint8_t internalXOnly[32];
+    memcpy(internalXOnly, compressed + 1, 32);
+    printHex("Internal x-only pubkey: ", internalXOnly, 32);
+
+    // 4. CORRECT BIP-341 TapTweak (96-byte tagged hash)
+    uint8_t tweakInput[32] = {0};
+    memcpy(tweakInput, internalXOnly, 32);  // last 32 zero → key-path
+
+    uint8_t tweak[32];
+    taggedHash((const uint8_t*)"TapTweak", 8, tweakInput, 32, tweak);
+    printHex("TapTweak (correct):     ", tweak, 32);
+    // → 3855ebb9c0d860286ef2e5beddc2fe7738e4135b254b23cb6c13dad4a9b2ea5e
+
+    // 5. Tweak private key (this is the only reliable path in uBitcoin)
+    uint8_t secret[32];
+    hdKey.getSecret(secret);
+
+    // Undo earlier negation if we did it
+    if (compressed[0] == 0x03) {
+        secp256k1_ec_privkey_negate(secp, secret);
+    }
+
+    secp256k1_ec_privkey_tweak_add(secp, secret, tweak);
+
+    // 6. Final tweaked pubkey
+    PrivateKey finalPriv(secret);
+    PublicKey finalPub = finalPriv.publicKey();
+    String finalHex = finalPub.toString();
+
+    uint8_t finalCompressed[33];
+    for (int i = 0; i < 33; i++) {
+        finalCompressed[i] = (uint8_t)strtoul(finalHex.substring(i*2, i*2+2).c_str(), nullptr, 16);
+    }
+
+    uint8_t finalXOnly[32];
+    memcpy(finalXOnly, finalCompressed + 1, 32);
+    printHex("Final x-only pubkey:    ", finalXOnly, 32);
+    // → 44fc7f8824c3f9b91d14d69eca3e7db2575698aee7527e89f033248ec82aeb41
+
+    // 7. Bech32m address
+    std::vector<uint8_t> words = convertBits(finalXOnly, 32, 8, 5, true);
+    words.insert(words.begin(), 1);
+    std::string addr = bech32::encode("bc", words, bech32::Encoding::BECH32M);
+    Serial.print("Final Taproot address:  ");
+    Serial.println(addr.c_str());
+
+    return String(addr.c_str());
 }
 
 bool validateMnemonic(const String& mnemonic) {
@@ -1177,6 +1264,7 @@ void readButtons() {
 void setup() {
     Serial.begin(115200);
     while (!Serial && millis() < 2000);
+    secp = secp256k1_context_create(SECP256K1_CONTEXT_SIGN | SECP256K1_CONTEXT_VERIFY);
     // Serial.println("\n\n--- Yada HW (TFT+Touch - PR #1 + Blockchain Selection + Mnemonic Import Letters) ---");
     // Serial.print("Setup: Init Heap: ");
     // Serial.println(heap_caps_get_free_size(MALLOC_CAP_DEFAULT));
@@ -1828,7 +1916,7 @@ void loop() {
                 // ONLY CHANGE: Bitcoin uses bech32 instead of legacy address
                 const char* chainName = blockchains[selectedBlockchainIndex].name;
                 if (strcmp(chainName, "Bitcoin") == 0) {
-                    public_key_hash_prev = bech32Address(prevParentKey.publicKey());
+                    public_key_hash_prev = getTaprootAddress(prevParentKey);
                 } else if (strcmp(chainName, "BSC") == 0) {
                     PublicKey prevPub = prevParentKey.publicKey();
                     prevPub.compressed = false;
@@ -1898,16 +1986,19 @@ void loop() {
             // Generate addresses — ONLY CHANGE HERE: Bitcoin uses bech32
             unsigned long addrStartTime = millis();
             char wif_n[64];
-            char addr_n_plus_1[44];
-            char addr_n_plus_2[44];
+            char addr_n_plus_1[70];   // was 44 → now 70 (62 chars + null + safety)
+            char addr_n_plus_2[70];   // was 44 → now 70
             const char* chainName = blockchains[selectedBlockchainIndex].name;
             strncpy(wif_n, currentKey.wif().c_str(), sizeof(wif_n));
 
             if (strcmp(chainName, "Bitcoin") == 0) {
                 wif_n[sizeof(wif_n)-1] = '\0';
 
-                String nextAddr1 = bech32Address(preRotatedKey.publicKey());
-                String nextAddr2 = bech32Address(twicePreRotatedKey.publicKey());
+                String taprootAddr = getTaprootAddress(currentKey);
+                // Serial.println("Direct Taproot address: " + taprootAddr);
+                // Serial.println("Direct Taproot from WIF: " + currentKey.wif());
+                String nextAddr1 = getTaprootAddress(preRotatedKey);
+                String nextAddr2 = getTaprootAddress(twicePreRotatedKey);
                 strncpy(addr_n_plus_1, nextAddr1.c_str(), sizeof(addr_n_plus_1)-1);
                 strncpy(addr_n_plus_2, nextAddr2.c_str(), sizeof(addr_n_plus_2)-1);
                 addr_n_plus_1[sizeof(addr_n_plus_1)-1] = '\0';

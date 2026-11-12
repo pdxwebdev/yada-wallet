@@ -95,7 +95,8 @@ struct BlockchainConfig {
 BlockchainConfig blockchains[] = {
   {"YadaCoin", 0, &Mainnet}, // YadaCoin uses Bitcoin-style Mainnet
   {"BSC", 1, &Mainnet},   // BSC with custom network
-  {"Bitcoin",  86, &Mainnet}       // BIP86: m/86'/0'/0' → bech32 bc1
+  {"Bitcoin",  86, &Mainnet},      // BIP86: m/86'/0'/0' → bech32 bc1
+  {"Base", 2, &Mainnet}   // Base, same keccak address as BSC
 };
 
 const int NUM_BLOCKCHAINS = sizeof(blockchains) / sizeof(blockchains[0]);
@@ -367,22 +368,17 @@ void printHex(const char* label, const uint8_t* data, size_t len) {
 
 // Full Taproot address derivation (key-path-only)
 String getTaprootAddress(const HDPrivateKey& hdKey) {
-    // Serial.println("=== getTaprootAddress() — BIP-341 Key-Path (100% Correct) ===");
-
-    // 1. Get compressed pubkey
+    // 1. Get compressed pubkey (33 bytes)
     PublicKey fullPub = hdKey.publicKey();
     String pubHex = fullPub.toString();
-    // Serial.print("Compressed pubkey: ");
-    // Serial.println(pubHex);
 
     uint8_t compressed[33];
     for (int i = 0; i < 33; i++) {
         compressed[i] = (uint8_t)strtoul(pubHex.substring(i*2, i*2+2).c_str(), nullptr, 16);
     }
 
-    // 2. Force even Y on internal key
+    // 2. Force even Y coordinate (BIP-341 requirement)
     if (compressed[0] == 0x03) {
-        // Serial.println("   Y odd → negating private key for even internal key");
         uint8_t secret[32];
         hdKey.getSecret(secret);
         secp256k1_ec_privkey_negate(secp, secret);
@@ -394,52 +390,27 @@ String getTaprootAddress(const HDPrivateKey& hdKey) {
         }
     }
 
-    // 3. Internal x-only (32 bytes)
-    uint8_t internalXOnly[32];
-    memcpy(internalXOnly, compressed + 1, 32);
-    printHex("Internal x-only pubkey: ", internalXOnly, 32);
+    // 3. Extract raw x-only 32-byte key — THIS IS THE FINAL OUTPUT KEY
+    uint8_t xonly[32];
+    memcpy(xonly, compressed + 1, 32);
 
-    // 4. CORRECT BIP-341 TapTweak (96-byte tagged hash)
-    uint8_t tweakInput[32] = {0};
-    memcpy(tweakInput, internalXOnly, 32);  // last 32 zero → key-path
+    printHex("Untweaked x-only key: ", xonly, 32);
 
-    uint8_t tweak[32];
-    taggedHash((const uint8_t*)"TapTweak", 8, tweakInput, 32, tweak);
-    printHex("TapTweak (correct):     ", tweak, 32);
-    // → 3855ebb9c0d860286ef2e5beddc2fe7738e4135b254b23cb6c13dad4a9b2ea5e
+    // 4. Build witness program: just the 32-byte x-only key
+    uint8_t program[32];
+    memcpy(program, xonly, 32);
 
-    // 5. Tweak private key (this is the only reliable path in uBitcoin)
-    uint8_t secret[32];
-    hdKey.getSecret(secret);
+    // 5. Convert 8→5 bits for Bech32m
+    std::vector<uint8_t> words = convertBits(program, 32, 8, 5, true);  // ← fixed: pass pointer + length
 
-    // Undo earlier negation if we did it
-    if (compressed[0] == 0x03) {
-        secp256k1_ec_privkey_negate(secp, secret);
-    }
-
-    secp256k1_ec_privkey_tweak_add(secp, secret, tweak);
-
-    // 6. Final tweaked pubkey
-    PrivateKey finalPriv(secret);
-    PublicKey finalPub = finalPriv.publicKey();
-    String finalHex = finalPub.toString();
-
-    uint8_t finalCompressed[33];
-    for (int i = 0; i < 33; i++) {
-        finalCompressed[i] = (uint8_t)strtoul(finalHex.substring(i*2, i*2+2).c_str(), nullptr, 16);
-    }
-
-    uint8_t finalXOnly[32];
-    memcpy(finalXOnly, finalCompressed + 1, 32);
-    printHex("Final x-only pubkey:    ", finalXOnly, 32);
-    // → 44fc7f8824c3f9b91d14d69eca3e7db2575698aee7527e89f033248ec82aeb41
-
-    // 7. Bech32m address
-    std::vector<uint8_t> words = convertBits(finalXOnly, 32, 8, 5, true);
+    // 6. Prepend witness version 1
     words.insert(words.begin(), 1);
+
+    // 7. Encode Bech32m
     std::string addr = bech32::encode("bc", words, bech32::Encoding::BECH32M);
-    // Serial.print("Final Taproot address:  ");
-    // Serial.println(addr.c_str());
+
+    Serial.print("Pure untweaked Taproot address: ");
+    Serial.println(addr.c_str());
 
     return String(addr.c_str());
 }
@@ -1821,10 +1792,10 @@ void loop() {
                     depth = hdWalletKey.depth;
                     computeFingerprint(hdWalletKey.publicKey(), parentFingerprint);
                     for (int r = 0; r < currentRotationIndex; r++) {
-                        cachedParentKey = cachedParentKey.derive(rotationPathSegment.c_str());
-                        if (r == currentRotationIndex - 2) {
-                          prevPrevParentKey = cachedParentKey;
+                        if (r == currentRotationIndex - 1) {
+                            prevPrevParentKey = cachedParentKey;
                         }
+                        cachedParentKey = cachedParentKey.derive(rotationPathSegment.c_str());
                         depth += 3;
                         computeFingerprint(cachedParentKey.publicKey(), parentFingerprint);
                     }
@@ -1840,6 +1811,9 @@ void loop() {
                     depth = hdWalletKey.depth;
                     computeFingerprint(hdWalletKey.publicKey(), parentFingerprint);
                     for (int r = 0; r < currentRotationIndex; r++) {
+                        if (r == currentRotationIndex - 1) {
+                            prevPrevParentKey = cachedParentKey;
+                        }
                         cachedParentKey = cachedParentKey.derive(rotationPathSegment.c_str());
                         depth += 3;
                         computeFingerprint(cachedParentKey.publicKey(), parentFingerprint);
@@ -1917,7 +1891,7 @@ void loop() {
                 const char* chainName = blockchains[selectedBlockchainIndex].name;
                 if (strcmp(chainName, "Bitcoin") == 0) {
                     public_key_hash_prev = getTaprootAddress(prevParentKey);
-                } else if (strcmp(chainName, "BSC") == 0) {
+                } else if (strcmp(chainName, "BSC") == 0 || strcmp(chainName, "Base") == 0) {
                     PublicKey prevPub = prevParentKey.publicKey();
                     prevPub.compressed = false;
                     unsigned char hash_n_minus_1[32];
@@ -2003,7 +1977,7 @@ void loop() {
                 strncpy(addr_n_plus_2, nextAddr2.c_str(), sizeof(addr_n_plus_2)-1);
                 addr_n_plus_1[sizeof(addr_n_plus_1)-1] = '\0';
                 addr_n_plus_2[sizeof(addr_n_plus_2)-1] = '\0';
-            } else if (strcmp(chainName, "BSC") == 0) {
+            } else if (strcmp(chainName, "BSC") == 0 || strcmp(chainName, "Base") == 0) {
                 unsigned char hash_n_plus_1[32];
                 unsigned char hash_n_plus_2[32];
                 PublicKey pubKey1 = preRotatedKey.publicKey();
@@ -2053,7 +2027,7 @@ void loop() {
                 // Serial.println("QR Data Length: " + String(strlen(combinedQRData)));
                 if (soloMode) {
                     const char* chainName = blockchains[selectedBlockchainIndex].name;
-                    if (strcmp(chainName, "BSC") == 0) {
+                    if (strcmp(chainName, "BSC") == 0 || strcmp(chainName, "Base") == 0) {
                         // BSC → raw 64-hex private key
                         uint8_t secret[32];
                         currentKey.getSecret(secret);

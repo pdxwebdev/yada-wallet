@@ -1,13 +1,25 @@
 {
   "name": "YadaCoin Hardware Wallet",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "builds": [
     {
       "chipFamily": "ESP32",
       "parts": [
         {
-          "path": "build/esp32.esp32.esp32/YADA.ino.merged.bin",
-          "offset": 0
+          "path": "build/esp32.esp32.esp32/YADA.ino.bootloader.bin",
+          "offset": 4096
+        },
+        {
+          "path": "build/esp32.esp32.esp32/YADA.ino.partitions.bin",
+          "offset": 32768
+        },
+        {
+          "path": "build/esp32.esp32.esp32/boot_app0.bin",
+          "offset": 57344
+        },
+        {
+          "path": "build/esp32.esp32.esp32/YADA.ino.bin",
+          "offset": 65536
         }
       ]
     }

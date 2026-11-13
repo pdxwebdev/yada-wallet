@@ -126,6 +126,7 @@ bool buttonIncrementTriggered = false;
 bool buttonConfirmTriggered = false;
 bool buttonCharsetTriggered = false;
 bool buttonSoloTriggered = false;
+bool buttonPrevTriggered = false;
 
 unsigned long touchHoldStartTime = 0;
 bool touchIsBeingHeld = false;
@@ -856,7 +857,7 @@ void showPasswordEntryScreen() {
   int nextButtonCenterX = 230;
   int okButtonCenterX = 280;
   int buttonCenterY = 205;
-  buttons[BTN_RIGHT].initButton(&tft, nextButtonCenterX, buttonCenterY, SPLIT_BUTTON_W, BUTTON_H, TFT_WHITE, TFT_GREEN, TFT_BLACK, "Next", 2);
+  buttons[BTN_RIGHT].initButton(&tft, nextButtonCenterX, buttonCenterY, SPLIT_BUTTON_W, BUTTON_H, TFT_WHITE, TFT_GREEN, TFT_BLACK, "Nxt", 2);
   buttons[BTN_RIGHT].drawButton();
   buttons[BTN_CONFIRM].initButton(&tft, okButtonCenterX, buttonCenterY, SPLIT_BUTTON_W, BUTTON_H, TFT_WHITE, TFT_GREEN, TFT_BLACK, "OK", 2);
   buttons[BTN_CONFIRM].drawButton();
@@ -873,6 +874,10 @@ void showPasswordEntryScreen() {
   int charsetButtonCenterX = 140;
   buttons[BTN_CHARSET].initButton(&tft, charsetButtonCenterX, buttonCenterY, SPLIT_BUTTON_W, BUTTON_H, TFT_WHITE, TFT_MAGENTA, TFT_BLACK, (char*)modeLabels[currentCharsetMode], 2);
   buttons[BTN_CHARSET].drawButton();
+
+  int prevButtonCenterX = 185;
+  buttons[BTN_LEFT].initButton(&tft, prevButtonCenterX, buttonCenterY, 40, BUTTON_H, TFT_WHITE, TFT_BLUE, TFT_BLACK, "Prv", 2);
+  buttons[BTN_LEFT].drawButton();
 }
 
 
@@ -1118,6 +1123,7 @@ void readButtons() {
   static bool wasOkPressedState = false;
   static bool wasCharsetPressedState = false;
   static bool wasSoloPressedState = false;
+  static bool wasPrevPressedState = false;
   static unsigned long lastTouchTime = 0;
   static unsigned long lastSoloTouchTime = 0;  // ← NEW LINE
   const unsigned long debounceDelay = 200;
@@ -1130,6 +1136,7 @@ void readButtons() {
   buttonConfirmTriggered = false;
   buttonCharsetTriggered = false;
   buttonSoloTriggered = false;
+  buttonPrevTriggered = false;
   bool pressed = ts.tirqTouched() && ts.touched();
   bool currentLeftContainsManual = false;
   bool currentRightContainsManual = false;
@@ -1141,6 +1148,7 @@ void readButtons() {
   bool currentOkContainsManual = false;
   bool currentCharsetContainsManual = false;
   bool currentSoloContainsManual = false;
+  bool currentPrevContainsManual = false;
   if (pressed) {
     TS_Point p = ts.getPoint();
     t_x = map(p.y, 338, 3739, tft.width(), 0);
@@ -1165,12 +1173,18 @@ void readButtons() {
       currentIncContainsManual = true;
     }
     // Charset switch button next to increment
-    int charsetBtnL = 15, charsetBtnR = 85, charsetBtnT = 100, charsetBtnB = 150;
+    int charsetBtnL = 15, charsetBtnR = 85, charsetBtnT = 113, charsetBtnB = 150;
+    if (currentState != STATE_PASSWORD_ENTRY) {
+      charsetBtnT = 100;
+    }
     if (t_x >= charsetBtnL && t_x <= charsetBtnR && t_y >= charsetBtnT && t_y <= charsetBtnB) {
       currentCharsetContainsManual = true;
     }
     // Split right for next and ok (horizontal split, bottom right)
     int rightNextL = 15, rightNextR = 85, rightNextT = 46, rightNextB = 95;
+    if (currentState == STATE_PASSWORD_ENTRY) {
+      rightNextB = 81;
+    }
     if (t_x >= rightNextL && t_x <= rightNextR && t_y >= rightNextT && t_y <= rightNextB) {
       currentNextContainsManual = true;
       // Serial.println("L: Touch in Next Button");
@@ -1191,6 +1205,9 @@ void readButtons() {
       currentJumpContainsManual = true;
       // Serial.println("L: Touch in Jump Button");
     }
+    if (currentState == STATE_PASSWORD_ENTRY && t_x >= 15 && t_x <= 85 && t_y >= 82 && t_y <= 112) {
+      currentPrevContainsManual = true;
+    }
     int soloBtnL = 170, soloBtnR = 214, soloBtnT = 2, soloBtnB = 38;
     if (t_x >= soloBtnL && t_x <= soloBtnR && t_y >= soloBtnT && t_y <= soloBtnB) {
         currentSoloContainsManual = true;
@@ -1208,6 +1225,7 @@ void readButtons() {
       if (wasDecPressedState) buttonDecrementTriggered = true;
       if (wasIncPressedState) buttonIncrementTriggered = true;
       if (wasCharsetPressedState) buttonCharsetTriggered = true;
+      if (wasPrevPressedState) buttonPrevTriggered = true;
       if (wasNextPressedState || wasOkPressedState) buttonRightTriggered = true;
       if (wasOkPressedState) buttonConfirmTriggered = true;
       lastTouchTime = millis();
@@ -1225,6 +1243,7 @@ void readButtons() {
   wasDecPressedState = currentDecContainsManual;
   wasIncPressedState = currentIncContainsManual;
   wasCharsetPressedState = currentCharsetContainsManual;
+  wasPrevPressedState = currentPrevContainsManual;
   wasNextPressedState = currentNextContainsManual;
   wasOkPressedState = currentOkContainsManual;
 }
@@ -1375,6 +1394,7 @@ void loop() {
     buttonConfirmTriggered = false;
     buttonCharsetTriggered = false;
     buttonSoloTriggered = false;
+    buttonPrevTriggered = false;
     touchIsBeingHeld = false;
   }
   if (firstLoop) {
@@ -1636,6 +1656,24 @@ void loop() {
           currentCharIndex = (currentCharIndex + 1) % sz;
           showPasswordEntryScreen();
           // Serial.printf("L: Char incremented to %c at index %d\n", charsetModes[currentCharsetMode][currentCharIndex], currentDigitIndex);
+      } else if (buttonPrevTriggered) {
+          if (currentDigitIndex > 0) {
+              currentDigitIndex--;
+              char saved = password[currentDigitIndex];
+              bool found = false;
+              for (int m = 0; m < NUM_MODES && !found; m++) {
+                  for (int i = 0; charsetModes[m][i] != '\0'; i++) {
+                      if (charsetModes[m][i] == saved) {
+                          currentCharsetMode = static_cast<CharsetMode>(m);
+                          currentCharIndex = i;
+                          found = true;
+                          break;
+                      }
+                  }
+              }
+              if (!found) currentCharIndex = 0;
+              showPasswordEntryScreen();
+          }
       } else if (buttonRightTriggered) {
           // Serial.printf("L: Right Button (Next) Pressed at digit index %d\n", currentDigitIndex);
           password[currentDigitIndex] = charsetModes[currentCharsetMode][currentCharIndex];
